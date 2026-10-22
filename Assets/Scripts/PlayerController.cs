@@ -23,7 +23,8 @@ public class PlayerController : MonoBehaviour
         groundedPlayer = controller.isGrounded;
         if (groundedPlayer && playerVelocity.y < 0)
         {
-            playerVelocity.y = 0f;
+            // Keep a small downward velocity so CharacterController reliably detects the ground
+            playerVelocity.y = -2f;
         }
 
         // Get keyboard inputs (WASD / Arrows)
@@ -38,16 +39,17 @@ public class PlayerController : MonoBehaviour
             currentSpeed *= sprintMultiplier;
         }
 
-        controller.Move(move * Time.deltaTime * currentSpeed);
-
         // Handle Jumping (Spacebar)
-        if (Input.GetButtonDown("Jump") && groundedPlayer)
+        if ((Input.GetKeyDown(KeyCode.Space) || Input.GetButtonDown("Jump")) && groundedPlayer)
         {
-            playerVelocity.y += Mathf.Sqrt(jumpHeight * -3.0f * gravityValue);
+            playerVelocity.y = Mathf.Sqrt(jumpHeight * -2.0f * gravityValue);
         }
 
         // Apply Gravity
         playerVelocity.y += gravityValue * Time.deltaTime;
-        controller.Move(playerVelocity * Time.deltaTime);
+
+        // Combine horizontal movement and vertical velocity into a single Move call
+        Vector3 finalMove = (move * currentSpeed) + new Vector3(0, playerVelocity.y, 0);
+        controller.Move(finalMove * Time.deltaTime);
     }
 }
