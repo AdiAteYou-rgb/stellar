@@ -871,56 +871,90 @@ public class MultiplayerMenuManager : MonoBehaviour
 
         if (currentState == MenuState.MainMenu)
         {
-            Rect cardRect = new Rect(centerX - 270f, centerY - 240f, 540f, 480f);
-            DrawPanelBox(cardRect, new Color(0.08f, 0.12f, 0.18f, 0.95f), new Color(0.35f, 0.75f, 1.0f, 0.75f));
+            Rect cardRect = new Rect(centerX - 260f, centerY - 225f, 520f, 450f);
+            GUI.DrawTexture(cardRect, GameVisuals.GetMenuTexture("MenuContainer"), ScaleMode.StretchToFill);
 
-            GUIStyle badgeStyle = new GUIStyle(GUI.skin.label)
+            // 1. Carved Wood Title Slab
+            Rect titleRect = new Rect(centerX - 195f, centerY - 200f, 390f, 80f);
+            GUI.DrawTexture(titleRect, GameVisuals.GetMenuTexture("MenuTitleBox"), ScaleMode.StretchToFill);
+
+            GUIStyle pvzTitleStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 14,
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleCenter
-            };
-            badgeStyle.normal.textColor = new Color(0.45f, 0.95f, 0.65f);
-            GUI.Label(new Rect(centerX - 250f, centerY - 215f, 500f, 26f), "🌿 MULTIPLAYER GARDEN DEFENSE 🧟", badgeStyle);
-
-            GUI.Label(new Rect(centerX - 250f, centerY - 185f, 500f, 44f), "PLANTS VS ZOMBIES", titleStyle);
-
-            GUIStyle goldSub = new GUIStyle(subStyle) { fontSize = 18 };
-            goldSub.normal.textColor = new Color(1.0f, 0.88f, 0.35f);
-            GUI.Label(new Rect(centerX - 250f, centerY - 140f, 500f, 32f), "5x8 TACTICAL WALL DEFENSE", goldSub);
-
-            GUIStyle descStyle = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 13,
+                richText = true,
                 alignment = TextAnchor.MiddleCenter,
-                wordWrap = true
+                fontSize = 24,
+                fontStyle = FontStyle.Bold
             };
-            descStyle.normal.textColor = new Color(0.85f, 0.90f, 0.98f);
-            GUI.Label(new Rect(centerX - 240f, centerY - 105f, 480f, 44f),
-                "Defend the 5x8 garden wall for 5 minutes, or breach the perimeter with the zombie horde!", descStyle);
+            Rect titleTopRect = new Rect(titleRect.x, titleRect.y + 7f, titleRect.width, 36f);
+            Rect titleTopShadow = new Rect(titleTopRect.x + 2f, titleTopRect.y + 2f, titleTopRect.width, titleTopRect.height);
+            GUI.Label(titleTopShadow, "<b><color=#000000>PLANTS vs. ZOMBIES</color></b>", pvzTitleStyle);
+            GUI.Label(titleTopRect, "<b><color=#3cf277>PLANTS</color> <size=14><color=#f8fafc>vs.</color></size> <color=#d8b4fe>ZOMBIES</color></b>", pvzTitleStyle);
 
-            GUI.backgroundColor = new Color(0.24f, 0.88f, 0.38f);
-            if (GUI.Button(new Rect(centerX - 170f, centerY - 45f, 340f, 62f), "PLAY GAME", bigBtn))
+            GUIStyle moonSubStyle = new GUIStyle(GUI.skin.label)
+            {
+                richText = true,
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 13,
+                fontStyle = FontStyle.Bold
+            };
+            Rect titleBotRect = new Rect(titleRect.x, titleRect.y + 44f, titleRect.width, 24f);
+            Rect titleBotShadow = new Rect(titleBotRect.x + 1.5f, titleBotRect.y + 1.5f, titleBotRect.width, titleBotRect.height);
+            GUI.Label(titleBotShadow, "<b><color=#000000>M O O N   D E F E N S E</color></b>", moonSubStyle);
+            GUI.Label(titleBotRect, "<b><color=#facc15>M O O N   D E F E N S E</color></b>", moonSubStyle);
+
+            // 2. Start Adventure Button
+            GUIStyle advBtnStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 20,
+                fontStyle = FontStyle.Bold,
+                padding = new RectOffset(44, 0, 0, 0)
+            };
+            advBtnStyle.normal.textColor = Color.white;
+            Rect advRect = new Rect(centerX - 225f, centerY - 95f, 450f, 72f);
+            if (DrawPvZButton(advRect, "START ADVENTURE", "BtnAdventure", advBtnStyle))
             {
                 statusMessage = "";
                 currentState = MenuState.HostOrJoinSelect;
             }
 
-            GUI.backgroundColor = new Color(0.28f, 0.60f, 0.92f);
-            if (GUI.Button(new Rect(centerX - 170f, centerY + 28f, 340f, 50f), "HOW TO PLAY & CONTROLS", normalBtn))
+            // 3. Controls & Guide Button
+            GUIStyle ctrlBtnStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 16,
+                fontStyle = FontStyle.Bold,
+                padding = new RectOffset(44, 0, 0, 0)
+            };
+            ctrlBtnStyle.normal.textColor = new Color(1.0f, 0.94f, 0.55f);
+            Rect ctrlRect = new Rect(centerX - 225f, centerY - 5f, 450f, 66f);
+            if (DrawPvZButton(ctrlRect, "CONTROLS & GUIDE", "BtnControls", ctrlBtnStyle))
             {
                 showHowToPlayModal = true;
             }
 
-            GUI.backgroundColor = new Color(0.85f, 0.30f, 0.30f);
-            if (GUI.Button(new Rect(centerX - 170f, centerY + 88f, 340f, 46f), "QUIT GAME", normalBtn))
+            // 4. Quit Game Button
+            GUIStyle quitBtnStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 15,
+                fontStyle = FontStyle.Bold,
+                padding = new RectOffset(44, 0, 0, 0)
+            };
+            quitBtnStyle.normal.textColor = new Color(0.95f, 0.96f, 0.98f);
+            Rect quitRect = new Rect(centerX - 225f, centerY + 80f, 450f, 60f);
+            if (DrawPvZButton(quitRect, "QUIT GAME", "BtnQuit", quitBtnStyle))
             {
                 QuitGame();
             }
 
-            GUI.backgroundColor = Color.white;
-            GUIStyle footerStyle = new GUIStyle(descStyle) { fontSize = 11 };
-            footerStyle.normal.textColor = new Color(0.6f, 0.7f, 0.85f);
+            // Footer
+            GUIStyle footerStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 11
+            };
+            footerStyle.normal.textColor = new Color(0.45f, 0.55f, 0.70f);
             GUI.Label(new Rect(centerX - 250f, centerY + 160f, 500f, 24f), "v1.2.0 • 16:9 Orthographic • Netcode Ready", footerStyle);
         }
         else if (currentState == MenuState.HostOrJoinSelect)
@@ -1208,5 +1242,30 @@ public class MultiplayerMenuManager : MonoBehaviour
     private void DrawPanelBox(Rect rect, Color color)
     {
         DrawPanelBox(rect, color, new Color(0.35f, 0.65f, 0.95f, 0.6f));
+    }
+
+    private bool DrawPvZButton(Rect rect, string text, string keyPrefix, GUIStyle textStyle)
+    {
+        Vector2 mousePos = Event.current.mousePosition;
+        bool isHover = rect.Contains(mousePos);
+        bool isMouseDown = isHover && (Event.current.type == EventType.MouseDown || (Event.current.type == EventType.MouseDrag && GUIUtility.hotControl != 0));
+
+        string stateSuffix = isMouseDown ? "Pressed" : (isHover ? "Hover" : "Normal");
+        Texture2D tex = GameVisuals.GetMenuTexture($"{keyPrefix}_{stateSuffix}");
+
+        GUI.DrawTexture(rect, tex, ScaleMode.StretchToFill);
+
+        // Text with drop shadow
+        float yOffset = isMouseDown ? 2f : 0f;
+        Rect shadowRect = new Rect(rect.x + 2f, rect.y + 2f + yOffset, rect.width, rect.height);
+        Rect textRect = new Rect(rect.x, rect.y + yOffset, rect.width, rect.height);
+
+        Color origColor = textStyle.normal.textColor;
+        textStyle.normal.textColor = new Color(0f, 0f, 0f, 0.85f);
+        GUI.Label(shadowRect, text, textStyle);
+        textStyle.normal.textColor = origColor;
+        GUI.Label(textRect, text, textStyle);
+
+        return GUI.Button(rect, GUIContent.none, GUIStyle.none);
     }
 }

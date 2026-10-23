@@ -237,6 +237,183 @@ public static class GameVisuals
         cachedSprites[key] = sprite;
     }
 
+    // ==================== PROCEDURAL MENU TEXTURE CACHE & GENERATORS ====================
+
+    private static readonly Dictionary<string, Texture2D> cachedMenuTextures = new Dictionary<string, Texture2D>();
+
+    public static Texture2D GetMenuTexture(string key)
+    {
+        if (cachedMenuTextures.TryGetValue(key, out Texture2D existing) && existing != null)
+        {
+            return existing;
+        }
+
+        string folder = "Assets/Sprites";
+        string filePath = Path.Combine(folder, $"{key}.png");
+
+        if (File.Exists(filePath))
+        {
+            byte[] fileData = File.ReadAllBytes(filePath);
+            Texture2D loaded = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            if (loaded.LoadImage(fileData))
+            {
+                loaded.filterMode = FilterMode.Bilinear;
+                loaded.wrapMode = TextureWrapMode.Clamp;
+                cachedMenuTextures[key] = loaded;
+                return loaded;
+            }
+        }
+
+        int w = 480, h = 76;
+        Canvas2D c = null;
+
+        if (key == "MenuContainer")
+        {
+            w = 560; h = 460;
+            c = new Canvas2D(w, h);
+            GenerateMenuContainer(c, w, h);
+        }
+        else if (key == "MenuTitleBox")
+        {
+            w = 440; h = 88;
+            c = new Canvas2D(w, h);
+            GenerateMenuTitleBox(c, w, h);
+        }
+        else if (key.StartsWith("BtnAdventure_"))
+        {
+            w = 480; h = 76;
+            c = new Canvas2D(w, h);
+            int state = key.EndsWith("Pressed") ? 2 : (key.EndsWith("Hover") ? 1 : 0);
+            GenerateAdventureButton(c, w, h, state);
+        }
+        else if (key.StartsWith("BtnControls_"))
+        {
+            w = 480; h = 70;
+            c = new Canvas2D(w, h);
+            int state = key.EndsWith("Pressed") ? 2 : (key.EndsWith("Hover") ? 1 : 0);
+            GenerateControlsButton(c, w, h, state);
+        }
+        else if (key.StartsWith("BtnQuit_"))
+        {
+            w = 480; h = 64;
+            c = new Canvas2D(w, h);
+            int state = key.EndsWith("Pressed") ? 2 : (key.EndsWith("Hover") ? 1 : 0);
+            GenerateQuitButton(c, w, h, state);
+        }
+
+        if (c != null)
+        {
+            Texture2D tex = c.ToTexture2D();
+            tex.filterMode = FilterMode.Bilinear;
+            tex.wrapMode = TextureWrapMode.Clamp;
+            cachedMenuTextures[key] = tex;
+            try
+            {
+                if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
+                File.WriteAllBytes(filePath, tex.EncodeToPNG());
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[GameVisuals] Could not cache {key}.png to disk: {ex.Message}");
+            }
+            return tex;
+        }
+
+        return Texture2D.whiteTexture;
+    }
+
+    private static void GenerateMenuContainer(Canvas2D c, int w, int h)
+    {
+        // Deep indigo / night sky card with dark wood/bronze border
+        c.DrawVerticalGradientRect(10, 10, w - 20, h - 20, new Color32(24, 34, 54, 250), new Color32(11, 16, 28, 252), 22f, 4.5f, new Color32(72, 42, 23, 255));
+        // Subtle inner rim line
+        c.DrawRect(16, 16, w - 32, h - 32, new Color32(0, 0, 0, 0), 17f, 1.2f, new Color32(40, 60, 95, 110));
+    }
+
+    private static void GenerateMenuTitleBox(Canvas2D c, int w, int h)
+    {
+        // Carved dark brown wood slab with warm amber border
+        c.DrawVerticalGradientRect(6, 6, w - 12, h - 12, new Color32(72, 40, 21, 255), new Color32(44, 23, 11, 255), 16f, 3.5f, new Color32(142, 82, 38, 255));
+        // Inner accent border
+        c.DrawRect(11, 11, w - 22, h - 22, new Color32(0, 0, 0, 0), 12f, 1.2f, new Color32(205, 135, 65, 80));
+    }
+
+    private static void GenerateAdventureButton(Canvas2D c, int w, int h, int state)
+    {
+        float yShift = (state == 2) ? -2f : 0f;
+        Color32 topCol = (state == 1) ? new Color32(126, 189, 46, 255) : ((state == 2) ? new Color32(82, 128, 28, 255) : new Color32(110, 165, 39, 255));
+        Color32 botCol = (state == 1) ? new Color32(82, 131, 28, 255) : ((state == 2) ? new Color32(52, 85, 16, 255) : new Color32(70, 111, 22, 255));
+        Color32 borderCol = (state == 1) ? new Color32(180, 240, 82, 255) : ((state == 2) ? new Color32(120, 171, 42, 255) : new Color32(159, 224, 56, 255));
+
+        // Bottom 3D bevel shadow
+        if (state != 2)
+        {
+            c.DrawRect(12, 4, w - 24, 12, new Color32(33, 54, 11, 240), 16f);
+        }
+
+        // Main pill slab
+        c.DrawVerticalGradientRect(10, 8 + yShift, w - 20, h - 16, topCol, botCol, 20f, 3.8f, borderCol);
+
+        // Blue rounded square on the left
+        float iconY = (h - 40) * 0.5f + yShift;
+        c.DrawVerticalGradientRect(26, iconY, 40, 40, new Color32(66, 135, 245, 255), new Color32(29, 78, 216, 255), 9f, 2f, new Color32(96, 165, 250, 255));
+
+        // White play arrow inside the blue square
+        c.DrawTriangle(new Vector2(40, iconY + 11), new Vector2(40, iconY + 29), new Vector2(56, iconY + 20), new Color32(255, 255, 255, 255));
+    }
+
+    private static void GenerateControlsButton(Canvas2D c, int w, int h, int state)
+    {
+        float yShift = (state == 2) ? -2f : 0f;
+        Color32 topCol = (state == 1) ? new Color32(110, 68, 36, 255) : ((state == 2) ? new Color32(72, 41, 20, 255) : new Color32(91, 55, 28, 255));
+        Color32 botCol = (state == 1) ? new Color32(71, 40, 18, 255) : ((state == 2) ? new Color32(46, 23, 9, 255) : new Color32(59, 34, 15, 255));
+        Color32 borderCol = (state == 1) ? new Color32(181, 112, 56, 255) : ((state == 2) ? new Color32(120, 68, 32, 255) : new Color32(146, 90, 45, 255));
+
+        // Bottom 3D bevel shadow
+        if (state != 2)
+        {
+            c.DrawRect(12, 4, w - 24, 10, new Color32(28, 15, 7, 240), 14f);
+        }
+
+        // Main pill slab
+        c.DrawVerticalGradientRect(10, 7 + yShift, w - 20, h - 14, topCol, botCol, 18f, 3.4f, borderCol);
+
+        // Rolled scroll icon on the left
+        float iconY = (h - 38) * 0.5f + yShift;
+        c.DrawRect(28, iconY + 5, 34, 26, new Color32(254, 240, 138, 255), 3f, 1.5f, new Color32(180, 110, 35, 255));
+        c.DrawEllipse(45, iconY + 31, 18, 5, new Color32(253, 224, 71, 255), 1.5f, new Color32(160, 90, 25, 255));
+        c.DrawEllipse(45, iconY + 5, 18, 5, new Color32(250, 204, 21, 255), 1.5f, new Color32(160, 90, 25, 255));
+        c.DrawRect(34, iconY + 22, 22, 2.5f, new Color32(146, 64, 14, 200));
+        c.DrawRect(34, iconY + 16, 22, 2.5f, new Color32(146, 64, 14, 200));
+        c.DrawRect(34, iconY + 10, 15, 2.5f, new Color32(146, 64, 14, 200));
+    }
+
+    private static void GenerateQuitButton(Canvas2D c, int w, int h, int state)
+    {
+        float yShift = (state == 2) ? -2f : 0f;
+        Color32 topCol = (state == 1) ? new Color32(106, 116, 135, 255) : ((state == 2) ? new Color32(68, 76, 89, 255) : new Color32(89, 98, 116, 255));
+        Color32 botCol = (state == 1) ? new Color32(70, 79, 95, 255) : ((state == 2) ? new Color32(43, 48, 56, 255) : new Color32(60, 68, 81, 255));
+        Color32 borderCol = (state == 1) ? new Color32(159, 174, 196, 255) : ((state == 2) ? new Color32(104, 116, 135, 255) : new Color32(132, 145, 166, 255));
+
+        // Bottom 3D bevel shadow
+        if (state != 2)
+        {
+            c.DrawRect(12, 4, w - 24, 10, new Color32(23, 28, 36, 240), 12f);
+        }
+
+        // Main pill slab
+        c.DrawVerticalGradientRect(10, 6 + yShift, w - 20, h - 12, topCol, botCol, 16f, 3.2f, borderCol);
+
+        // Tombstone icon on the left
+        float iconY = (h - 36) * 0.5f + yShift;
+        c.DrawRect(32, iconY + 3, 24, 19, new Color32(148, 163, 184, 255), 2f, 1.5f, new Color32(51, 65, 85, 255));
+        c.DrawCircle(44, iconY + 22, 12, new Color32(148, 163, 184, 255), 1.5f, new Color32(51, 65, 85, 255));
+        c.DrawRect(42.5f, iconY + 9, 3, 13, new Color32(51, 65, 85, 255));
+        c.DrawRect(38.5f, iconY + 15, 11, 3, new Color32(51, 65, 85, 255));
+        c.DrawTriangle(new Vector2(28, iconY + 3), new Vector2(33, iconY + 9), new Vector2(36, iconY + 3), new Color32(34, 197, 94, 255));
+        c.DrawTriangle(new Vector2(51, iconY + 3), new Vector2(55, iconY + 10), new Vector2(59, iconY + 3), new Color32(34, 197, 94, 255));
+    }
+
     // ==================== PROCEDURAL 2D ARTWORK GENERATORS ====================
 
     private static void GenerateMoonflowerTexture(Canvas2D c)
@@ -816,6 +993,70 @@ public static class GameVisuals
 
             for (int py = minY; py <= maxY; py++)
             {
+                for (int px = minX; px <= maxX; px++)
+                {
+                    float clX = Mathf.Clamp(px, cx1, cx2);
+                    float clY = Mathf.Clamp(py, cy1, cy2);
+
+                    float dx = px - clX;
+                    float dy = py - clY;
+                    float dist = Mathf.Sqrt(dx * dx + dy * dy);
+
+                    if (dist > r + totalOutline + 0.5f) continue;
+
+                    if (outline > 0f)
+                    {
+                        if (dist <= r - 0.5f)
+                        {
+                            BlendPixel(px, py, fill);
+                        }
+                        else if (dist <= r + 0.5f)
+                        {
+                            float t = dist - (r - 0.5f);
+                            BlendPixel(px, py, Color32.Lerp(fill, outlineCol, t));
+                        }
+                        else if (dist <= r + totalOutline - 0.5f)
+                        {
+                            BlendPixel(px, py, outlineCol);
+                        }
+                        else
+                        {
+                            float alpha = Mathf.Clamp01(r + totalOutline + 0.5f - dist);
+                            Color32 c = outlineCol;
+                            c.a = (byte)(c.a * alpha);
+                            BlendPixel(px, py, c);
+                        }
+                    }
+                    else
+                    {
+                        float alpha = Mathf.Clamp01(r + 0.5f - dist);
+                        Color32 c = fill;
+                        c.a = (byte)(c.a * alpha);
+                        BlendPixel(px, py, c);
+                    }
+                }
+            }
+        }
+
+        public void DrawVerticalGradientRect(float x, float y, float w, float h, Color32 topColor, Color32 botColor, float cornerRadius = 0f, float outline = 0f, Color32 outlineCol = default)
+        {
+            float totalOutline = outline;
+            int minX = Mathf.Max(0, Mathf.FloorToInt(x - totalOutline - 1));
+            int maxX = Mathf.Min(width - 1, Mathf.CeilToInt(x + w + totalOutline + 1));
+            int minY = Mathf.Max(0, Mathf.FloorToInt(y - totalOutline - 1));
+            int maxY = Mathf.Min(height - 1, Mathf.CeilToInt(y + h + totalOutline + 1));
+
+            float r = Mathf.Min(cornerRadius, Mathf.Min(w, h) * 0.5f);
+            float cx1 = x + r;
+            float cx2 = x + w - r;
+            float cy1 = y + r;
+            float cy2 = y + h - r;
+
+            for (int py = minY; py <= maxY; py++)
+            {
+                float tGrad = Mathf.Clamp01((py - y) / Mathf.Max(1f, h));
+                Color32 fill = Color32.Lerp(botColor, topColor, tGrad);
+
                 for (int px = minX; px <= maxX; px++)
                 {
                     float clX = Mathf.Clamp(px, cx1, cx2);
