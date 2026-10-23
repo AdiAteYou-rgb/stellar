@@ -11,16 +11,25 @@ public class CollectibleMoon : MonoBehaviour
     [Header("Movement")]
     public bool isFallingFromSky = false;
     public Vector3 fallTargetPosition;
-    public float fallSpeed = 2.2f;
-    public float travelToBankSpeed = 22.0f;
+    public float fallSpeed = 1.65f;
+    public float travelToBankSpeed = 24.0f;
 
     private bool isCollected = false;
     private float spawnTime;
     private Vector3 popStartPos;
     private Vector3 popEndPos;
     private bool isPopping = false;
+    private Vector3 baseScale;
+    private float floatSeed;
 
     public bool IsCollected => isCollected;
+
+    private void Awake()
+    {
+        baseScale = transform.localScale;
+        if (baseScale.x < 0.01f) baseScale = Vector3.one * 0.9f;
+        floatSeed = Random.Range(0f, 100f);
+    }
 
     private void OnEnable()
     {
@@ -29,6 +38,7 @@ public class CollectibleMoon : MonoBehaviour
             ActiveMoons.Add(this);
         }
         spawnTime = Time.time;
+        if (baseScale.x < 0.01f) baseScale = transform.localScale;
     }
 
     private void OnDisable()
@@ -73,8 +83,15 @@ public class CollectibleMoon : MonoBehaviour
 
     private void Update()
     {
-        // Gentle spin and pulse
-        transform.Rotate(0f, 0f, 45f * Time.deltaTime, Space.Self);
+        if (baseScale.x < 0.01f) baseScale = transform.localScale;
+
+        // Gentle celestial hovering sway and breathing pulse
+        float t = Time.time + floatSeed;
+        float swayZ = Mathf.Sin(t * 2.2f) * 6.0f;
+        transform.rotation = Quaternion.Euler(0f, 0f, swayZ);
+
+        float pulse = 1.0f + Mathf.Sin(t * 3.2f) * 0.065f;
+        transform.localScale = baseScale * pulse;
 
         if (isCollected)
         {
@@ -90,7 +107,7 @@ public class CollectibleMoon : MonoBehaviour
 
             // Shrink slightly as it enters the bank
             float dist = Vector3.Distance(transform.position, bankWorldPos);
-            if (dist < 0.2f)
+            if (dist < 0.25f)
             {
                 if (gridManager != null)
                 {
@@ -108,22 +125,25 @@ public class CollectibleMoon : MonoBehaviour
 
         if (isFallingFromSky)
         {
-            transform.position = Vector3.MoveTowards(
-                transform.position,
-                fallTargetPosition,
-                fallSpeed * Time.deltaTime
-            );
-            if (Vector3.Distance(transform.position, fallTargetPosition) < 0.02f)
+            float step = fallSpeed * Time.deltaTime;
+            Vector3 target = fallTargetPosition;
+            // Add subtle floating drift
+            float driftX = Mathf.Sin(t * 2.5f) * 0.04f;
+            target.x += driftX;
+
+            transform.position = Vector3.MoveTowards(transform.position, target, step);
+            if (Vector3.Distance(transform.position, fallTargetPosition) < 0.05f)
             {
                 isFallingFromSky = false;
+                transform.position = fallTargetPosition;
             }
         }
         else if (isPopping)
         {
-            float t = Mathf.Clamp01((Time.time - spawnTime) / 0.45f);
-            float arc = Mathf.Sin(t * Mathf.PI) * 0.45f;
-            transform.position = Vector3.Lerp(popStartPos, popEndPos, t) + new Vector3(0f, arc, 0f);
-            if (t >= 1.0f)
+            float pt = Mathf.Clamp01((Time.time - spawnTime) / 0.45f);
+            float arc = Mathf.Sin(pt * Mathf.PI) * 0.45f;
+            transform.position = Vector3.Lerp(popStartPos, popEndPos, pt) + new Vector3(0f, arc, 0f);
+            if (pt >= 1.0f)
             {
                 isPopping = false;
             }

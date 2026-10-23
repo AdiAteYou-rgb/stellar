@@ -3,13 +3,14 @@ using UnityEngine;
 public enum PlantType
 {
     Moonflower = 0,
-    Roze = 1,
+    Rose = 1,
+    Roze = 1, // Backwards-compatible alias for existing references
     Durian = 2
 }
 
 /// <summary>
 /// Plant component placed on a tile of the 5x8 wall grid.
-/// Supports Moonflower (produces 50 moons every 15s), Roze (shoots only when a zombie is in its lane), and Durian (high-HP tank).
+/// Supports Moonflower (produces 50 moons every 15s), Rose (shoots thorn darts when a zombie is in its lane), and Durian (high-HP tank).
 /// </summary>
 public class PlaceholderPlant : MonoBehaviour
 {
@@ -26,7 +27,7 @@ public class PlaceholderPlant : MonoBehaviour
     public float moonProduceInterval = 15.0f;
     public int moonProduceAmount = 50;
 
-    [Header("Roze (Peashooter) Settings")]
+    [Header("Rose (Peashooter) Settings")]
     public float shootInterval = 1.8f;
 
     private GridManager gridManager;
@@ -44,7 +45,7 @@ public class PlaceholderPlant : MonoBehaviour
             case PlantType.Moonflower:
                 maxHealth = 100;
                 break;
-            case PlantType.Roze:
+            case PlantType.Rose:
                 maxHealth = 100;
                 break;
             case PlantType.Durian:
@@ -81,18 +82,20 @@ public class PlaceholderPlant : MonoBehaviour
             {
                 actionTimer = 0f;
                 gridManager.SpawnMoonFromFlower(transform.position, moonProduceAmount);
+                GetComponent<PlantBobber>()?.TriggerWobble(10f);
             }
         }
-        else if (plantType == PlantType.Roze)
+        else if (plantType == PlantType.Rose)
         {
-            // Roze ONLY shoots when there is a zombie in the same row ahead of it!
+            // Rose ONLY shoots when there is a zombie in the same row ahead of it!
             if (gridManager.HasZombieInRow(row, transform.position.x - 0.25f))
             {
                 actionTimer += Time.deltaTime;
                 if (actionTimer >= shootInterval)
                 {
                     actionTimer = 0f;
-                    gridManager.SpawnRoseProjectile(row, transform.position + new Vector3(0.45f, 0.15f, -0.1f));
+                    gridManager.SpawnRoseProjectile(row, transform.position + new Vector3(0.48f, 0.54f, -0.1f));
+                    GetComponent<PlantBobber>()?.TriggerRecoil(0.25f);
                 }
             }
             else

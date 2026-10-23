@@ -40,6 +40,12 @@ public class PlayerController : MonoBehaviour
         {
             playerCamera = Camera.main;
         }
+
+        MeshRenderer mr = GetComponent<MeshRenderer>();
+        if (mr != null)
+        {
+            mr.enabled = isFirstPersonArenaActive;
+        }
     }
 
     public void EnterFirstPersonArena(Camera cam, Vector3 spawnPosition, Quaternion spawnRotation, string opponentName = "OPPONENT")
@@ -91,6 +97,7 @@ public class PlayerController : MonoBehaviour
         MeshRenderer mr = GetComponent<MeshRenderer>();
         if (mr != null)
         {
+            mr.enabled = false;
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
         }
     }

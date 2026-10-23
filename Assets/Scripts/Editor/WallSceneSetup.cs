@@ -36,7 +36,9 @@ public static class WallSceneSetup
         else
         {
             existing.SyncWallScale();
+            menuMgr.EnsureMenuBackdrop(force: true);
             menuMgr.SnapCameraToMenuWall();
+            PlayerSettings.runInBackground = true;
             SetGameView16By9();
         }
     }
@@ -148,6 +150,7 @@ public static class WallSceneSetup
         menuMgr.gameplayWallGrid = grid;
 
         grid.SyncWallScale();
+        menuMgr.EnsureMenuBackdrop(force: true);
         menuMgr.SnapCameraToMenuWall();
         SetGameView16By9();
 

@@ -28,6 +28,7 @@ public class RoseProjectile : MonoBehaviour
         }
 
         transform.position += Vector3.right * (speed * Time.deltaTime);
+        transform.Rotate(0f, 0f, 540f * Time.deltaTime, Space.Self);
 
         // Check collision with any zombie in the same row
         for (int i = WallZombie.ActiveZombies.Count - 1; i >= 0; i--)

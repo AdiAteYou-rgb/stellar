@@ -58,8 +58,10 @@ public class GridManager : MonoBehaviour
     public int moonflowerCost = 50;
     public float moonflowerCooldown = 5.0f;
 
-    public int rozeCost = 100;
-    public float rozeCooldown = 5.0f;
+    public int roseCost = 100;
+    public float roseCooldown = 5.0f;
+    public int rozeCost { get => roseCost; set => roseCost = value; }
+    public float rozeCooldown { get => roseCooldown; set => roseCooldown = value; }
 
     public int durianCost = 50;
     public float durianCooldown = 30.0f;
@@ -67,7 +69,7 @@ public class GridManager : MonoBehaviour
     [Header("Zombie Player: Brains & Zombie Spawning")]
     public int currentBrains = 150;
     public int zombieCost = 50;
-    public float zombieCooldown = 5.0f;
+    public float zombieCooldown = 2.0f; // Snappy 2.0s spawn cooldown for active zombie offensive
     public float passiveBrainInterval = 10.0f;
     public int passiveBrainAmount = 25;
     private float zombieCooldownTimer = 0f;
@@ -96,11 +98,11 @@ public class GridManager : MonoBehaviour
     private GameObject arena3DRoot;
 
     [Header("Visual Colors")]
-    public Color tileColorLight = new Color(0.22f, 0.42f, 0.24f, 1.0f);
-    public Color tileColorDark = new Color(0.18f, 0.36f, 0.20f, 1.0f);
-    public Color tileHoverColor = new Color(0.45f, 0.85f, 0.45f, 1.0f);
-    public Color tileZombieHoverColor = new Color(0.75f, 0.35f, 0.9f, 1.0f);
-    public Color tileOccupiedColor = new Color(0.75f, 0.35f, 0.25f, 1.0f);
+    public Color tileColorLight = new Color(0.24f, 0.54f, 0.24f, 1.0f);
+    public Color tileColorDark = new Color(0.18f, 0.44f, 0.18f, 1.0f);
+    public Color tileHoverColor = new Color(0.45f, 0.92f, 0.45f, 1.0f);
+    public Color tileZombieHoverColor = new Color(0.82f, 0.38f, 0.98f, 1.0f);
+    public Color tileOccupiedColor = new Color(0.85f, 0.30f, 0.25f, 1.0f);
 
     public event Action<int, int, PlantType> OnPlantPlacedLocal;
     public event Action<int, int> OnZombiePlacedLocal;
@@ -117,21 +119,22 @@ public class GridManager : MonoBehaviour
     private Material sharedBaseMaterial;
 
     // Top-left UI layout rects (Moon Bank + 3 Plant Buttons + Brain Bank + Zombie Button)
-    private readonly Rect moonBankRect = new Rect(14f, 14f, 125f, 66f);
+    private readonly Rect moonBankRect = new Rect(12f, 12f, 110f, 66f);
     private readonly Rect[] plantButtonRects = new Rect[3]
     {
-        new Rect(145f, 14f, 142f, 66f),
-        new Rect(293f, 14f, 142f, 66f),
-        new Rect(441f, 14f, 142f, 66f)
+        new Rect(126f, 12f, 125f, 66f),
+        new Rect(255f, 12f, 125f, 66f),
+        new Rect(384f, 12f, 125f, 66f)
     };
-    private readonly Rect brainBankRect = new Rect(600f, 14f, 125f, 66f);
-    private readonly Rect zombieButtonRect = new Rect(731f, 14f, 150f, 66f);
+    private readonly Rect brainBankRect = new Rect(12f, 82f, 110f, 66f);
+    private readonly Rect zombieButtonRect = new Rect(126f, 82f, 150f, 66f);
 
     public float TileWidth => columns > 0 ? wallWidth / columns : 2.0f;
     public float TileHeight => rows > 0 ? wallHeight / rows : 1.8f;
 
     private void Awake()
     {
+        Application.runInBackground = true;
         SyncWallScale();
         if (Application.isPlaying)
         {
@@ -280,11 +283,38 @@ public class GridManager : MonoBehaviour
             transform.position.y,
             transform.position.z - (wallThickness * 0.5f) - 0.02f
         );
-        defenseLineObj.transform.localScale = new Vector3(0.12f, wallHeight, 1.0f);
+        defenseLineObj.transform.localScale = new Vector3(0.16f, wallHeight, 1.0f);
         DestroyCollider(defenseLineObj);
-        defenseLineObj.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(1.0f, 0.22f, 0.22f, 0.9f));
+        defenseLineObj.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(1.0f, 0.20f, 0.25f, 0.98f));
+
+        // Wooden Garden Border Frame
+        Transform existingBorder = transform.Find("GardenFrame");
+        if (existingBorder != null) Destroy(existingBorder.gameObject);
+        GameObject frameRoot = new GameObject("GardenFrame");
+        frameRoot.transform.SetParent(transform, false);
+        Color woodCol = new Color(0.38f, 0.24f, 0.14f);
+        float hw = wallWidth * 0.5f;
+        float hh = wallHeight * 0.5f;
+        float beamThick = 0.28f;
+        float zOffset = -(wallThickness * 0.5f) - 0.03f;
+
+        CreateFrameBeam(frameRoot, new Vector3(0f, hh + beamThick * 0.45f, zOffset), new Vector3(wallWidth + beamThick * 2f, beamThick, 0.15f), woodCol);
+        CreateFrameBeam(frameRoot, new Vector3(0f, -hh - beamThick * 0.45f, zOffset), new Vector3(wallWidth + beamThick * 2f, beamThick, 0.15f), woodCol);
+        CreateFrameBeam(frameRoot, new Vector3(-hw - beamThick * 0.45f, 0f, zOffset), new Vector3(beamThick, wallHeight, 0.15f), woodCol);
+        CreateFrameBeam(frameRoot, new Vector3(hw + beamThick * 0.45f, 0f, zOffset), new Vector3(beamThick, wallHeight, 0.15f), woodCol);
 
         CreatePreviewGhosts();
+    }
+
+    private void CreateFrameBeam(GameObject parent, Vector3 localPos, Vector3 localScale, Color color)
+    {
+        GameObject beam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        beam.name = "FrameBeam";
+        beam.transform.SetParent(parent.transform, false);
+        beam.transform.localPosition = localPos;
+        beam.transform.localScale = localScale;
+        DestroyCollider(beam);
+        beam.GetComponent<Renderer>().material = CreateColoredMaterial(color);
     }
 
     private void CreatePreviewGhosts()
@@ -354,6 +384,17 @@ public class GridManager : MonoBehaviour
             SyncWallScale();
         }
 
+        if (localRole == MultiplayerMenuManager.PlayerRole.Plant)
+        {
+            canPlacePlants = true;
+            canPlaceZombies = false;
+        }
+        else if (localRole == MultiplayerMenuManager.PlayerRole.Zombie)
+        {
+            canPlacePlants = false;
+            canPlaceZombies = true;
+        }
+
         if (!gameplayActive || is2DWorldPaused || matchResult != MatchResult.InProgress)
         {
             HideAllPreviewGhosts();
@@ -407,7 +448,7 @@ public class GridManager : MonoBehaviour
             }
             else if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2))
             {
-                TrySelectPlant(PlantType.Roze);
+                TrySelectPlant(PlantType.Rose);
             }
             else if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3))
             {
@@ -777,10 +818,10 @@ public class GridManager : MonoBehaviour
                     opponent.transform.localScale = new Vector3(2.5f, 2.5f, 2.5f);
                     opponent.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // Face the arena
                     break;
-                case PlantType.Roze:
-                    opponent = CreatePlantVisual(PlantType.Roze, "Arena3D_RozeBoss", isGhost: false);
+                case PlantType.Rose:
+                    opponent = CreatePlantVisual(PlantType.Rose, "Arena3D_RoseBoss", isGhost: false);
                     opponent.transform.localScale = new Vector3(2.5f, 2.5f, 2.5f);
-                    opponent.transform.localRotation = Quaternion.Euler(0f, -90f, 0f); // Aim barrel down arena at player
+                    opponent.transform.localRotation = Quaternion.Euler(0f, 0f, 0f);
                     break;
                 case PlantType.Durian:
                 default:
@@ -811,7 +852,7 @@ public class GridManager : MonoBehaviour
         switch (type)
         {
             case PlantType.Moonflower: return moonflowerCost;
-            case PlantType.Roze: return rozeCost;
+            case PlantType.Rose: return roseCost;
             case PlantType.Durian: return durianCost;
             default: return 50;
         }
@@ -822,7 +863,7 @@ public class GridManager : MonoBehaviour
         switch (type)
         {
             case PlantType.Moonflower: return moonflowerCooldown;
-            case PlantType.Roze: return rozeCooldown;
+            case PlantType.Rose: return roseCooldown;
             case PlantType.Durian: return durianCooldown;
             default: return 5f;
         }
@@ -967,18 +1008,13 @@ public class GridManager : MonoBehaviour
 
     public void SpawnRoseProjectile(int row, Vector3 spawnPos)
     {
-        GameObject proj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        proj.name = "RoseThornProjectile";
+        GameObject proj = GameVisuals.CreateRoseProjectile("RoseThornProjectile");
         if (tilesContainer != null)
         {
             proj.transform.SetParent(tilesContainer.transform, true);
         }
 
-        DestroyCollider(proj);
-
         proj.transform.position = spawnPos;
-        proj.transform.localScale = new Vector3(0.32f, 0.32f, 0.32f);
-        proj.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(1.0f, 0.2f, 0.35f, 1.0f));
 
         RoseProjectile rp = proj.AddComponent<RoseProjectile>();
         rp.Initialize(this, row, transform.position.x + wallWidth * 0.5f);
@@ -991,24 +1027,7 @@ public class GridManager : MonoBehaviour
 
     private GameObject CreateMoonVisual(string name)
     {
-        GameObject moonRoot = new GameObject(name);
-
-        GameObject outer = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        outer.name = "MoonBody";
-        outer.transform.SetParent(moonRoot.transform, false);
-        outer.transform.localScale = new Vector3(0.75f, 0.75f, 0.25f);
-        DestroyCollider(outer);
-        outer.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(1.0f, 0.92f, 0.35f, 1.0f));
-
-        GameObject core = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        core.name = "MoonCore";
-        core.transform.SetParent(moonRoot.transform, false);
-        core.transform.localPosition = new Vector3(0f, 0f, -0.06f);
-        core.transform.localScale = new Vector3(0.5f, 0.5f, 0.25f);
-        DestroyCollider(core);
-        core.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.75f, 0.96f, 1.0f, 1.0f));
-
-        return moonRoot;
+        return GameVisuals.CreateMoon(name);
     }
 
     /// <summary>
@@ -1336,109 +1355,12 @@ public class GridManager : MonoBehaviour
 
     private GameObject CreateZombieVisual(string objectName, bool isGhost)
     {
-        GameObject root = new GameObject(objectName);
-        float scale = Mathf.Min(TileWidth, TileHeight) * 0.45f;
-        float alphaMul = isGhost ? 0.65f : 1.0f;
-
-        // Torso / Coat
-        GameObject torso = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        torso.transform.SetParent(root.transform, false);
-        torso.transform.localPosition = new Vector3(0f, -scale * 0.25f, 0f);
-        torso.transform.localScale = new Vector3(scale * 0.65f, scale * 0.9f, scale * 0.45f);
-        DestroyCollider(torso);
-        torso.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.35f, 0.25f, 0.45f) * alphaMul);
-
-        // Zombie Head (Greenish-grey)
-        GameObject head = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        head.transform.SetParent(root.transform, false);
-        head.transform.localPosition = new Vector3(0f, scale * 0.48f, 0f);
-        head.transform.localScale = new Vector3(scale * 0.65f, scale * 0.65f, scale * 0.65f);
-        DestroyCollider(head);
-        head.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.45f, 0.72f, 0.42f) * alphaMul);
-
-        // Outstretched Arms pointing left (-X) toward the plants
-        GameObject arms = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        arms.transform.SetParent(root.transform, false);
-        arms.transform.localPosition = new Vector3(-scale * 0.45f, -scale * 0.05f, -0.05f);
-        arms.transform.localScale = new Vector3(scale * 0.75f, scale * 0.24f, scale * 0.55f);
-        DestroyCollider(arms);
-        arms.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.42f, 0.68f, 0.40f) * alphaMul);
-
-        return root;
+        return GameVisuals.CreateZombie(objectName, isGhost, TileWidth, TileHeight);
     }
 
     private GameObject CreatePlantVisual(PlantType type, string objectName, bool isGhost)
     {
-        GameObject root = new GameObject(objectName);
-        float scale = Mathf.Min(TileWidth, TileHeight) * 0.45f;
-        float alphaMul = isGhost ? 0.65f : 1.0f;
-
-        if (type == PlantType.Moonflower)
-        {
-            GameObject stem = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            stem.transform.SetParent(root.transform, false);
-            stem.transform.localPosition = new Vector3(0f, -scale * 0.35f, 0f);
-            stem.transform.localScale = new Vector3(scale * 0.32f, scale * 0.35f, scale * 0.32f);
-            DestroyCollider(stem);
-            stem.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.2f, 0.7f, 0.45f) * alphaMul);
-
-            GameObject petals = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            petals.transform.SetParent(root.transform, false);
-            petals.transform.localPosition = new Vector3(0f, scale * 0.2f, 0.03f);
-            petals.transform.localScale = new Vector3(scale * 1.05f, scale * 1.05f, scale * 0.35f);
-            DestroyCollider(petals);
-            petals.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.45f, 0.85f, 1.0f) * alphaMul);
-
-            GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            head.transform.SetParent(root.transform, false);
-            head.transform.localPosition = new Vector3(0f, scale * 0.2f, -0.05f);
-            head.transform.localScale = new Vector3(scale * 0.7f, scale * 0.7f, scale * 0.45f);
-            DestroyCollider(head);
-            head.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(1.0f, 0.95f, 0.4f) * alphaMul);
-        }
-        else if (type == PlantType.Roze)
-        {
-            GameObject stem = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            stem.transform.SetParent(root.transform, false);
-            stem.transform.localPosition = new Vector3(0f, -scale * 0.35f, 0f);
-            stem.transform.localScale = new Vector3(scale * 0.35f, scale * 0.35f, scale * 0.35f);
-            DestroyCollider(stem);
-            stem.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.15f, 0.65f, 0.25f) * alphaMul);
-
-            GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            head.transform.SetParent(root.transform, false);
-            head.transform.localPosition = new Vector3(0f, scale * 0.22f, 0f);
-            head.transform.localScale = new Vector3(scale * 0.88f, scale * 0.88f, scale * 0.88f);
-            DestroyCollider(head);
-            head.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.95f, 0.18f, 0.32f) * alphaMul);
-
-            GameObject barrel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            barrel.transform.SetParent(root.transform, false);
-            barrel.transform.localPosition = new Vector3(scale * 0.48f, scale * 0.22f, 0f);
-            barrel.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
-            barrel.transform.localScale = new Vector3(scale * 0.38f, scale * 0.28f, scale * 0.38f);
-            DestroyCollider(barrel);
-            barrel.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.8f, 0.12f, 0.25f) * alphaMul);
-        }
-        else if (type == PlantType.Durian)
-        {
-            GameObject body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            body.transform.SetParent(root.transform, false);
-            body.transform.localPosition = Vector3.zero;
-            body.transform.localScale = new Vector3(scale * 1.15f, scale * 1.25f, scale * 1.1f);
-            DestroyCollider(body);
-            body.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.68f, 0.58f, 0.2f) * alphaMul);
-
-            GameObject spikes1 = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            spikes1.transform.SetParent(root.transform, false);
-            spikes1.transform.localPosition = Vector3.zero;
-            spikes1.transform.localRotation = Quaternion.Euler(0f, 0f, 45f);
-            spikes1.transform.localScale = new Vector3(scale * 0.95f, scale * 0.95f, scale * 0.95f);
-            DestroyCollider(spikes1);
-            spikes1.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.82f, 0.72f, 0.25f) * alphaMul);
-        }
-
-        return root;
+        return GameVisuals.CreatePlant(type, objectName, isGhost, TileWidth, TileHeight);
     }
 
     private void DestroyCollider(GameObject obj)
@@ -1446,7 +1368,14 @@ public class GridManager : MonoBehaviour
         Collider col = obj.GetComponent<Collider>();
         if (col != null)
         {
-            Destroy(col);
+            if (Application.isPlaying)
+            {
+                Destroy(col);
+            }
+            else
+            {
+                DestroyImmediate(col);
+            }
         }
     }
 
@@ -1464,6 +1393,12 @@ public class GridManager : MonoBehaviour
 
     private Color GetBaseTileColor(int row, int col)
     {
+        if (col >= columns - zombieAllowedColumnsFromRight)
+        {
+            return ((row + col) % 2 == 0)
+                ? new Color(0.28f, 0.22f, 0.35f, 1.0f)
+                : new Color(0.20f, 0.16f, 0.28f, 1.0f);
+        }
         return ((row + col) % 2 == 0) ? tileColorLight : tileColorDark;
     }
 
@@ -1552,7 +1487,12 @@ public class GridManager : MonoBehaviour
 
         // TOP-CENTER HUD: 5-MINUTE COUNTDOWN TIMER
         float sw = Screen.width;
-        Rect timerRect = new Rect((sw - 230f) * 0.5f, 14f, 230f, 66f);
+        // Dynamically position the Defense Timer so it NEVER overlaps the Durian button on the left or the Role banner on the right
+        float minTimerX = canPlacePlants ? (plantButtonRects[2].x + plantButtonRects[2].width + 16f) : 285f;
+        float maxTimerX = sw - 245f - 210f; // 10px buffer before the compact 220px top-right role banner
+        float timerX = (maxTimerX > minTimerX) ? (minTimerX + (maxTimerX - minTimerX) * 0.5f) : minTimerX;
+        Rect timerRect = new Rect(timerX, 12f, 210f, 66f);
+
         int mins = Mathf.FloorToInt(matchTimeRemaining / 60f);
         int secs = Mathf.FloorToInt(matchTimeRemaining % 60f);
         string timeStr = $"{mins:D2}:{secs:D2}";
@@ -1598,16 +1538,16 @@ public class GridManager : MonoBehaviour
             GUI.Box(moonBankRect, $"MOONS\n{currentMoons}", bankStyle);
 
             DrawPlantSeedButton(0, PlantType.Moonflower, "Moonflower [1]", moonflowerCost, new Color(0.4f, 0.85f, 1.0f));
-            DrawPlantSeedButton(1, PlantType.Roze, "Roze [2]", rozeCost, new Color(1.0f, 0.4f, 0.5f));
+            DrawPlantSeedButton(1, PlantType.Rose, "Rose [2]", roseCost, new Color(1.0f, 0.4f, 0.5f));
             DrawPlantSeedButton(2, PlantType.Durian, "Durian [3]", durianCost, new Color(0.9f, 0.78f, 0.3f));
         }
 
         // 2. ZOMBIE PLAYER: BRAINS BANK + ZOMBIE SPAWN BUTTON (Only shown for Zombie Player or None)
         if (canPlaceZombies)
         {
-            // Position on the far left if Plant UI is hidden
-            Rect actualBrainRect = canPlacePlants ? brainBankRect : new Rect(14f, 14f, 125f, 66f);
-            Rect actualZombieRect = canPlacePlants ? zombieButtonRect : new Rect(145f, 14f, 150f, 66f);
+            // Position on the far left if Plant UI is hidden; if both are active, place on second tier
+            Rect actualBrainRect = canPlacePlants ? brainBankRect : new Rect(12f, 12f, 110f, 66f);
+            Rect actualZombieRect = canPlacePlants ? zombieButtonRect : new Rect(126f, 12f, 145f, 66f);
 
             bankStyle.normal.textColor = new Color(0.95f, 0.55f, 1.0f);
             GUI.backgroundColor = new Color(0.24f, 0.10f, 0.28f, 0.95f);
@@ -1654,18 +1594,18 @@ public class GridManager : MonoBehaviour
         }
         else if (!enoughMoons)
         {
-            statusLine = $"Need {cost} Moons";
+            statusLine = $"Need {cost} 🌙";
         }
         else if (isSelected)
         {
-            statusLine = "SELECTED (Click tile)";
+            statusLine = "SELECTED ✓";
         }
         else
         {
             statusLine = "READY";
         }
 
-        string label = $"{title}\nCost: {cost} Moons\n{statusLine}";
+        string label = $"{title}\n{cost} 🌙 • {statusLine}";
         if (GUI.Button(rect, label, btnStyle))
         {
             TrySelectPlant(type);
@@ -1704,18 +1644,18 @@ public class GridManager : MonoBehaviour
         }
         else if (!enoughBrains)
         {
-            statusLine = $"Need {zombieCost} Brains";
+            statusLine = $"Need {zombieCost} 🧠";
         }
         else if (isZombieSelected)
         {
-            statusLine = "SELECTED (Click tile)";
+            statusLine = "SELECTED ✓";
         }
         else
         {
             statusLine = "READY";
         }
 
-        string label = $"Zombie [4]\nCost: {zombieCost} Brains\n{statusLine}";
+        string label = $"Zombie [4]\n{zombieCost} 🧠 • {statusLine}";
         if (GUI.Button(targetRect, label, btnStyle))
         {
             TrySelectZombie();

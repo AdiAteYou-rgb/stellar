@@ -64,6 +64,10 @@ public class MultiplayerMenuManager : MonoBehaviour
 
     private Vector3 targetCameraPos;
 
+    [Header("Menu Polish & UI")]
+    public bool showHowToPlayModal = false;
+    private float codeCopiedTimer = 0f;
+
     private void Awake()
     {
         if (menuWallTransform == null)
@@ -80,6 +84,8 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
 
         SyncMenuWallScale();
+        EnsureMenuBackdrop();
+        Application.runInBackground = true;
 
         if (Application.isPlaying)
         {
@@ -92,6 +98,20 @@ public class MultiplayerMenuManager : MonoBehaviour
                 gameplayWallGrid.OnZombiePlacedLocal += HandleLocalZombiePlaced;
                 gameplayWallGrid.OnMatchEndedLocal += HandleLocalMatchEnded;
                 gameplayWallGrid.OnMatchRestartedLocal += HandleLocalMatchRestarted;
+            }
+            SnapCameraToMenuWall();
+        }
+    }
+
+    private void Start()
+    {
+        if (Application.isPlaying)
+        {
+            currentState = MenuState.MainMenu;
+            if (gameplayWallGrid != null)
+            {
+                gameplayWallGrid.lockCameraToThisWall = false;
+                gameplayWallGrid.gameplayActive = false;
             }
             SnapCameraToMenuWall();
         }
@@ -145,6 +165,11 @@ public class MultiplayerMenuManager : MonoBehaviour
         if (!Application.isPlaying)
         {
             return;
+        }
+
+        if (codeCopiedTimer > 0f)
+        {
+            codeCopiedTimer -= Time.deltaTime;
         }
 
         // Process incoming network messages on the Unity main thread
@@ -639,6 +664,156 @@ public class MultiplayerMenuManager : MonoBehaviour
 #endif
     }
 
+    // ==================== 3D MENU BACKDROP ====================
+
+    public void EnsureMenuBackdrop(bool force = false)
+    {
+        if (menuWallTransform == null) menuWallTransform = transform;
+        Transform existing = menuWallTransform.Find("MenuBackdropRoot");
+        if (existing != null)
+        {
+            // Remove previous version if scale was not normalized or missing 2D moon / stars
+            if (force || existing.localScale.x > 0.5f || existing.Find("MenuStar_0") == null || existing.Find("MenuMoon") == null)
+            {
+                if (Application.isPlaying)
+                {
+                    Destroy(existing.gameObject);
+                }
+                else
+                {
+                    DestroyImmediate(existing.gameObject);
+                }
+            }
+            else
+            {
+                return;
+            }
+        }
+
+        GameObject root = new GameObject("MenuBackdropRoot");
+        root.transform.SetParent(menuWallTransform, false);
+        root.transform.localPosition = Vector3.zero;
+        root.transform.localRotation = Quaternion.identity;
+        root.transform.localScale = new Vector3(
+            1.0f / Mathf.Max(0.01f, wallWidth),
+            1.0f / Mathf.Max(0.01f, wallHeight),
+            1.0f / Mathf.Max(0.01f, wallThickness)
+        );
+
+        Color woodCol = new Color(0.42f, 0.28f, 0.16f);
+        Color grassCol = new Color(0.24f, 0.54f, 0.22f);
+
+        // Dusk wall background tint
+        Renderer wallRend = menuWallTransform.GetComponent<Renderer>();
+        if (wallRend != null)
+        {
+            wallRend.material = GameVisuals.GetColoredMaterial(new Color(0.12f, 0.16f, 0.28f), 0.15f);
+        }
+
+        // Celestial star sparkles on wall
+        for (int i = 0; i < 14; i++)
+        {
+            GameObject star = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            star.name = $"MenuStar_{i}";
+            star.transform.SetParent(root.transform, false);
+            float rx = ((i * 3.7f + 1.2f) % 15f) - 7.5f;
+            float ry = 0.5f + ((i * 2.1f) % 3.5f);
+            star.transform.localPosition = new Vector3(rx, ry, -0.15f);
+            star.transform.localRotation = Quaternion.Euler(0f, 0f, 45f);
+            star.transform.localScale = new Vector3(0.15f, 0.15f, 0.05f);
+            DestroyCollider(star);
+            star.GetComponent<Renderer>().material = GameVisuals.GetColoredMaterial(new Color(1.0f, 0.95f, 0.75f), 0.9f);
+        }
+
+        // Lawn strip at bottom of menu wall
+        GameObject lawn = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        lawn.name = "MenuLawn";
+        lawn.transform.SetParent(root.transform, false);
+        lawn.transform.localPosition = new Vector3(0f, -3.8f, -0.2f);
+        lawn.transform.localScale = new Vector3(16.2f, 1.4f, 0.25f);
+        DestroyCollider(lawn);
+        lawn.GetComponent<Renderer>().material = GameVisuals.GetColoredMaterial(grassCol);
+
+        // Picket fence slats
+        for (int i = -7; i <= 7; i++)
+        {
+            GameObject slat = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            slat.name = $"FenceSlat_{i}";
+            slat.transform.SetParent(root.transform, false);
+            slat.transform.localPosition = new Vector3(i * 1.05f, -2.7f, -0.25f);
+            slat.transform.localScale = new Vector3(0.38f, 1.7f, 0.12f);
+            DestroyCollider(slat);
+            slat.GetComponent<Renderer>().material = GameVisuals.GetColoredMaterial(woodCol);
+        }
+
+        // Horizontal fence rails
+        GameObject railTop = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        railTop.transform.SetParent(root.transform, false);
+        railTop.transform.localPosition = new Vector3(0f, -2.2f, -0.28f);
+        railTop.transform.localScale = new Vector3(16.0f, 0.22f, 0.12f);
+        DestroyCollider(railTop);
+        railTop.GetComponent<Renderer>().material = GameVisuals.GetColoredMaterial(woodCol);
+
+        GameObject railBot = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        railBot.transform.SetParent(root.transform, false);
+        railBot.transform.localPosition = new Vector3(0f, -3.2f, -0.28f);
+        railBot.transform.localScale = new Vector3(16.0f, 0.22f, 0.12f);
+        DestroyCollider(railBot);
+        railBot.GetComponent<Renderer>().material = GameVisuals.GetColoredMaterial(woodCol);
+
+        // 2D Animated Moonflower on left
+        GameObject moonflower = GameVisuals.CreatePlant(PlantType.Moonflower, "MenuMoonflower", false, 2.0f, 2.0f);
+        moonflower.transform.SetParent(root.transform, false);
+        moonflower.transform.localPosition = new Vector3(-5.2f, -2.5f, -0.6f);
+        moonflower.transform.localRotation = Quaternion.identity;
+
+        // 2D Animated Rose on left
+        GameObject rose = GameVisuals.CreatePlant(PlantType.Rose, "MenuRose", false, 2.0f, 2.0f);
+        rose.transform.SetParent(root.transform, false);
+        rose.transform.localPosition = new Vector3(-3.2f, -2.5f, -0.6f);
+        rose.transform.localRotation = Quaternion.identity;
+
+        // 2D Animated Zombie on right
+        GameObject zombie = GameVisuals.CreateZombie("MenuZombie", false, 2.0f, 2.0f);
+        zombie.transform.SetParent(root.transform, false);
+        zombie.transform.localPosition = new Vector3(5.0f, -2.4f, -0.6f);
+        zombie.transform.localRotation = Quaternion.identity;
+        PlantBobber zBob = zombie.AddComponent<PlantBobber>();
+        zBob.breatheSpeed = 2.0f;
+        zBob.swayAngle = 3.5f;
+
+        // 2D Floating Celestial Moon in night sky
+        GameObject moon = GameVisuals.CreateMoon("MenuMoon", 0.65f);
+        moon.transform.SetParent(root.transform, false);
+        moon.transform.localPosition = new Vector3(-5.2f, 2.4f, -0.6f);
+
+        // Warm Menu Point Light
+        GameObject lightObj = new GameObject("MenuWarmLight");
+        lightObj.transform.SetParent(root.transform, false);
+        lightObj.transform.localPosition = new Vector3(0f, 0.5f, -3.5f);
+        Light light = lightObj.AddComponent<Light>();
+        light.type = LightType.Point;
+        light.range = 22f;
+        light.color = new Color(1.0f, 0.95f, 0.88f);
+        light.intensity = 1.6f;
+    }
+
+    private void DestroyCollider(GameObject obj)
+    {
+        Collider col = obj.GetComponent<Collider>();
+        if (col != null)
+        {
+            if (Application.isPlaying)
+            {
+                Destroy(col);
+            }
+            else
+            {
+                DestroyImmediate(col);
+            }
+        }
+    }
+
     // ==================== ON-SCREEN MENU & ROLE BOXES UI ====================
 
     private void OnGUI()
@@ -655,66 +830,124 @@ public class MultiplayerMenuManager : MonoBehaviour
 
         GUIStyle titleStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = 34,
+            fontSize = 30,
             fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
+            alignment = TextAnchor.MiddleCenter,
+            wordWrap = true
         };
         titleStyle.normal.textColor = Color.white;
 
         GUIStyle subStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = 18,
+            fontSize = 15,
             fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
+            alignment = TextAnchor.MiddleCenter,
+            wordWrap = true
         };
-        subStyle.normal.textColor = new Color(0.9f, 0.95f, 1.0f);
+        subStyle.normal.textColor = new Color(0.88f, 0.94f, 1.0f);
 
         GUIStyle bigBtn = new GUIStyle(GUI.skin.button)
         {
-            fontSize = 22,
+            fontSize = 20,
             fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
+            alignment = TextAnchor.MiddleCenter,
+            wordWrap = true
         };
+
+        GUIStyle normalBtn = new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 15,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter,
+            wordWrap = true
+        };
+
+        // 1. HOW TO PLAY MODAL OVERLAY
+        if (showHowToPlayModal)
+        {
+            DrawHowToPlayModal(sw, sh, centerX, centerY);
+            return;
+        }
 
         if (currentState == MenuState.MainMenu)
         {
-            DrawPanelBox(new Rect(centerX - 240f, centerY - 180f, 480f, 360f), new Color(0.1f, 0.14f, 0.22f, 0.92f));
-            GUI.Label(new Rect(centerX - 220f, centerY - 150f, 440f, 60f), "PLANTS VS ZOMBIES\nWALL DEFENSE", titleStyle);
+            Rect cardRect = new Rect(centerX - 270f, centerY - 240f, 540f, 480f);
+            DrawPanelBox(cardRect, new Color(0.08f, 0.12f, 0.18f, 0.95f), new Color(0.35f, 0.75f, 1.0f, 0.75f));
 
-            GUI.backgroundColor = new Color(0.3f, 0.9f, 0.4f);
-            if (GUI.Button(new Rect(centerX - 150f, centerY - 40f, 300f, 70f), "PLAY", bigBtn))
+            GUIStyle badgeStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 14,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter
+            };
+            badgeStyle.normal.textColor = new Color(0.45f, 0.95f, 0.65f);
+            GUI.Label(new Rect(centerX - 250f, centerY - 215f, 500f, 26f), "🌿 MULTIPLAYER GARDEN DEFENSE 🧟", badgeStyle);
+
+            GUI.Label(new Rect(centerX - 250f, centerY - 185f, 500f, 44f), "PLANTS VS ZOMBIES", titleStyle);
+
+            GUIStyle goldSub = new GUIStyle(subStyle) { fontSize = 18 };
+            goldSub.normal.textColor = new Color(1.0f, 0.88f, 0.35f);
+            GUI.Label(new Rect(centerX - 250f, centerY - 140f, 500f, 32f), "5x8 TACTICAL WALL DEFENSE", goldSub);
+
+            GUIStyle descStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 13,
+                alignment = TextAnchor.MiddleCenter,
+                wordWrap = true
+            };
+            descStyle.normal.textColor = new Color(0.85f, 0.90f, 0.98f);
+            GUI.Label(new Rect(centerX - 240f, centerY - 105f, 480f, 44f),
+                "Defend the 5x8 garden wall for 5 minutes, or breach the perimeter with the zombie horde!", descStyle);
+
+            GUI.backgroundColor = new Color(0.24f, 0.88f, 0.38f);
+            if (GUI.Button(new Rect(centerX - 170f, centerY - 45f, 340f, 62f), "PLAY GAME", bigBtn))
             {
                 statusMessage = "";
                 currentState = MenuState.HostOrJoinSelect;
             }
 
-            GUI.backgroundColor = new Color(0.9f, 0.35f, 0.35f);
-            if (GUI.Button(new Rect(centerX - 150f, centerY + 55f, 300f, 70f), "QUIT", bigBtn))
+            GUI.backgroundColor = new Color(0.28f, 0.60f, 0.92f);
+            if (GUI.Button(new Rect(centerX - 170f, centerY + 28f, 340f, 50f), "HOW TO PLAY & CONTROLS", normalBtn))
+            {
+                showHowToPlayModal = true;
+            }
+
+            GUI.backgroundColor = new Color(0.85f, 0.30f, 0.30f);
+            if (GUI.Button(new Rect(centerX - 170f, centerY + 88f, 340f, 46f), "QUIT GAME", normalBtn))
             {
                 QuitGame();
             }
+
             GUI.backgroundColor = Color.white;
+            GUIStyle footerStyle = new GUIStyle(descStyle) { fontSize = 11 };
+            footerStyle.normal.textColor = new Color(0.6f, 0.7f, 0.85f);
+            GUI.Label(new Rect(centerX - 250f, centerY + 160f, 500f, 24f), "v1.2.0 • 16:9 Orthographic • Netcode Ready", footerStyle);
         }
         else if (currentState == MenuState.HostOrJoinSelect)
         {
-            DrawPanelBox(new Rect(centerX - 260f, centerY - 200f, 520f, 400f), new Color(0.1f, 0.14f, 0.22f, 0.92f));
-            GUI.Label(new Rect(centerX - 240f, centerY - 175f, 480f, 50f), "SELECT MULTIPLAYER MODE", titleStyle);
+            Rect cardRect = new Rect(centerX - 310f, centerY - 230f, 620f, 460f);
+            DrawPanelBox(cardRect, new Color(0.08f, 0.12f, 0.18f, 0.95f), new Color(0.35f, 0.75f, 1.0f, 0.75f));
 
-            GUI.backgroundColor = new Color(0.3f, 0.8f, 1.0f);
-            if (GUI.Button(new Rect(centerX - 160f, centerY - 85f, 320f, 75f), "HOST GAME", bigBtn))
+            GUI.Label(new Rect(centerX - 280f, centerY - 200f, 560f, 42f), "SELECT MULTIPLAYER MODE", titleStyle);
+            GUI.Label(new Rect(centerX - 280f, centerY - 155f, 560f, 30f), "Choose how you want to connect with another player:", subStyle);
+
+            GUI.backgroundColor = new Color(0.25f, 0.75f, 0.98f);
+            if (GUI.Button(new Rect(centerX - 280f, centerY - 105f, 270f, 185f),
+                "👑 HOST GAME\n\nCreate a new lobby\n& get a 6-character code\nto invite Player 2!", bigBtn))
             {
                 StartHosting();
             }
 
-            GUI.backgroundColor = new Color(0.4f, 0.95f, 0.5f);
-            if (GUI.Button(new Rect(centerX - 160f, centerY + 10f, 320f, 75f), "JOIN GAME", bigBtn))
+            GUI.backgroundColor = new Color(0.30f, 0.90f, 0.45f);
+            if (GUI.Button(new Rect(centerX + 10f, centerY - 105f, 270f, 185f),
+                "🔗 JOIN GAME\n\nEnter the Host's\n6-character code\nto connect instantly!", bigBtn))
             {
                 statusMessage = "Enter the Host's 6-character code below:";
                 currentState = MenuState.JoiningEnterCode;
             }
 
-            GUI.backgroundColor = new Color(0.75f, 0.75f, 0.75f);
-            if (GUI.Button(new Rect(centerX - 100f, centerY + 115f, 200f, 45f), "Back"))
+            GUI.backgroundColor = new Color(0.75f, 0.75f, 0.78f);
+            if (GUI.Button(new Rect(centerX - 120f, centerY + 115f, 240f, 48f), "← Back to Main Menu", normalBtn))
             {
                 currentState = MenuState.MainMenu;
             }
@@ -722,38 +955,66 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
         else if (currentState == MenuState.HostingWaitingForPlayer)
         {
-            DrawPanelBox(new Rect(centerX - 280f, centerY - 210f, 560f, 420f), new Color(0.1f, 0.14f, 0.22f, 0.94f));
-            GUI.Label(new Rect(centerX - 260f, centerY - 185f, 520f, 45f), "HOSTING LOBBY", titleStyle);
-            GUI.Label(new Rect(centerX - 260f, centerY - 130f, 520f, 35f), "Share this Join Code with the other player:", subStyle);
+            Rect cardRect = new Rect(centerX - 320f, centerY - 265f, 640f, 530f);
+            DrawPanelBox(cardRect, new Color(0.08f, 0.12f, 0.18f, 0.96f), new Color(0.35f, 0.95f, 0.55f, 0.85f));
 
-            // Big Join Code Box
+            GUI.Label(new Rect(centerX - 300f, centerY - 235f, 600f, 42f), "HOSTING LOBBY", titleStyle);
+            GUI.Label(new Rect(centerX - 300f, centerY - 190f, 600f, 30f), "Share this 6-Character Join Code with Player 2:", subStyle);
+
+            // Spaced-out Code Box for maximum legibility
+            string spacedCode = string.Join("   ", hostJoinCode.ToCharArray());
             GUIStyle codeStyle = new GUIStyle(GUI.skin.box)
             {
                 fontSize = 36,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter
             };
-            codeStyle.normal.textColor = new Color(0.3f, 1.0f, 0.45f);
-            GUI.Box(new Rect(centerX - 140f, centerY - 85f, 280f, 70f), hostJoinCode, codeStyle);
+            codeStyle.normal.textColor = new Color(0.35f, 1.0f, 0.55f);
+            GUI.Box(new Rect(centerX - 210f, centerY - 150f, 420f, 70f), spacedCode, codeStyle);
 
-            GUI.backgroundColor = new Color(0.4f, 0.85f, 1.0f);
-            if (GUI.Button(new Rect(centerX - 100f, centerY - 5f, 200f, 40f), "Copy Code"))
+            // Copy & New Code buttons
+            string copyLabel = (codeCopiedTimer > 0f) ? "✓ Copied to Clipboard!" : "📋 Copy Code";
+            GUI.backgroundColor = (codeCopiedTimer > 0f) ? new Color(0.3f, 0.95f, 0.5f) : new Color(0.32f, 0.75f, 0.98f);
+            if (GUI.Button(new Rect(centerX - 210f, centerY - 70f, 250f, 44f), copyLabel, normalBtn))
             {
                 GUIUtility.systemCopyBuffer = hostJoinCode;
-                statusMessage = "Code copied to clipboard!";
+                codeCopiedTimer = 2.5f;
+                statusMessage = "Code copied to clipboard! Share it with Player 2.";
             }
 
-            GUI.Label(new Rect(centerX - 260f, centerY + 45f, 520f, 35f), statusMessage, subStyle);
+            GUI.backgroundColor = new Color(0.85f, 0.85f, 0.90f);
+            if (GUI.Button(new Rect(centerX + 50f, centerY - 70f, 160f, 44f), "🔄 New Code", normalBtn))
+            {
+                hostJoinCode = GenerateRandomJoinCode(hostingPort);
+                codeCopiedTimer = 0f;
+                statusMessage = "Generated a new 6-character room code!";
+            }
 
-            // Convenient helper so you can also test in 1 window immediately without opening a 2nd build
-            GUI.backgroundColor = new Color(0.35f, 0.95f, 0.5f);
-            if (GUI.Button(new Rect(centerX - 180f, centerY + 90f, 360f, 48f), "Simulate Player 2 Joined (Test Now)"))
+            // Generous Status & Network info box (Word-wrap with ample height, NEVER clips)
+            string pulse = (Time.time % 1.0f < 0.5f) ? "●" : "○";
+            string fullStatus = $"{pulse} WAITING FOR PLAYER 2 TO CONNECT...\nLocal Port: {hostingPort}   |   LAN Format: {hostJoinCode}@127.0.0.1\n{statusMessage}";
+
+            GUIStyle statusBoxStyle = new GUIStyle(GUI.skin.box)
+            {
+                fontSize = 13,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter,
+                wordWrap = true
+            };
+            statusBoxStyle.normal.textColor = new Color(0.9f, 0.95f, 1.0f);
+            GUI.backgroundColor = new Color(0.12f, 0.18f, 0.28f, 0.95f);
+            GUI.Box(new Rect(centerX - 280f, centerY - 12f, 560f, 75f), fullStatus, statusBoxStyle);
+
+            // Solo Test Helper
+            GUI.backgroundColor = new Color(0.32f, 0.92f, 0.48f);
+            if (GUI.Button(new Rect(centerX - 220f, centerY + 80f, 440f, 50f), "⚡ Simulate Player 2 Joined (Solo Test Now)", bigBtn))
             {
                 BeginTransportToGameplayWall();
             }
 
-            GUI.backgroundColor = new Color(0.8f, 0.4f, 0.4f);
-            if (GUI.Button(new Rect(centerX - 100f, centerY + 150f, 200f, 40f), "Cancel"))
+            // Cancel button
+            GUI.backgroundColor = new Color(0.85f, 0.35f, 0.35f);
+            if (GUI.Button(new Rect(centerX - 120f, centerY + 145f, 240f, 44f), "✕ Cancel & Return", normalBtn))
             {
                 StopNetwork();
                 currentState = MenuState.HostOrJoinSelect;
@@ -762,9 +1023,11 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
         else if (currentState == MenuState.JoiningEnterCode)
         {
-            DrawPanelBox(new Rect(centerX - 280f, centerY - 200f, 560f, 400f), new Color(0.1f, 0.14f, 0.22f, 0.94f));
-            GUI.Label(new Rect(centerX - 260f, centerY - 175f, 520f, 45f), "JOIN GAME", titleStyle);
-            GUI.Label(new Rect(centerX - 260f, centerY - 120f, 520f, 35f), statusMessage, subStyle);
+            Rect cardRect = new Rect(centerX - 310f, centerY - 240f, 620f, 480f);
+            DrawPanelBox(cardRect, new Color(0.08f, 0.12f, 0.18f, 0.96f), new Color(0.35f, 0.85f, 1.0f, 0.85f));
+
+            GUI.Label(new Rect(centerX - 280f, centerY - 210f, 560f, 42f), "JOIN GAME LOBBY", titleStyle);
+            GUI.Label(new Rect(centerX - 280f, centerY - 165f, 560f, 30f), "Enter the Host's 6-character room code:", subStyle);
 
             GUIStyle inputStyle = new GUIStyle(GUI.skin.textField)
             {
@@ -773,16 +1036,35 @@ public class MultiplayerMenuManager : MonoBehaviour
                 alignment = TextAnchor.MiddleCenter
             };
 
-            enteredJoinCode = GUI.TextField(new Rect(centerX - 150f, centerY - 70f, 300f, 60f), enteredJoinCode, 24, inputStyle);
+            // Input field + Paste button
+            enteredJoinCode = GUI.TextField(new Rect(centerX - 190f, centerY - 125f, 260f, 58f), enteredJoinCode ?? "", 24, inputStyle);
 
-            GUI.backgroundColor = new Color(0.35f, 0.95f, 0.5f);
-            if (GUI.Button(new Rect(centerX - 150f, centerY + 10f, 300f, 65f), "CONNECT TO HOST", bigBtn))
+            GUI.backgroundColor = new Color(0.35f, 0.75f, 0.95f);
+            if (GUI.Button(new Rect(centerX + 80f, centerY - 125f, 110f, 58f), "📋 Paste", normalBtn))
+            {
+                enteredJoinCode = (GUIUtility.systemCopyBuffer ?? "").Trim().ToUpperInvariant();
+            }
+
+            // Status message box (Generous height, word-wrap, NEVER clips)
+            GUIStyle statusBoxStyle = new GUIStyle(GUI.skin.box)
+            {
+                fontSize = 13,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter,
+                wordWrap = true
+            };
+            statusBoxStyle.normal.textColor = new Color(1.0f, 0.92f, 0.45f);
+            GUI.backgroundColor = new Color(0.12f, 0.18f, 0.28f, 0.95f);
+            GUI.Box(new Rect(centerX - 270f, centerY - 52f, 540f, 68f), statusMessage, statusBoxStyle);
+
+            GUI.backgroundColor = new Color(0.30f, 0.92f, 0.48f);
+            if (GUI.Button(new Rect(centerX - 180f, centerY + 30f, 360f, 60f), "▶ CONNECT TO HOST", bigBtn))
             {
                 ConnectAsJoiner();
             }
 
-            GUI.backgroundColor = new Color(0.75f, 0.75f, 0.75f);
-            if (GUI.Button(new Rect(centerX - 100f, centerY + 110f, 200f, 42f), "Back"))
+            GUI.backgroundColor = new Color(0.75f, 0.75f, 0.78f);
+            if (GUI.Button(new Rect(centerX - 110f, centerY + 105f, 220f, 44f), "← Back", normalBtn))
             {
                 StopNetwork();
                 currentState = MenuState.HostOrJoinSelect;
@@ -791,20 +1073,23 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
         else if (currentState == MenuState.RoleSelection)
         {
-            DrawPanelBox(new Rect(centerX - 380f, centerY - 220f, 760f, 440f), new Color(0.08f, 0.1f, 0.14f, 0.92f));
-            GUI.Label(new Rect(centerX - 350f, centerY - 195f, 700f, 45f), "CHOOSE YOUR SIDE", titleStyle);
+            Rect cardRect = new Rect(centerX - 420f, centerY - 250f, 840f, 500f);
+            DrawPanelBox(cardRect, new Color(0.08f, 0.12f, 0.18f, 0.96f), new Color(0.45f, 0.85f, 1.0f, 0.85f));
+
+            GUI.Label(new Rect(centerX - 380f, centerY - 225f, 760f, 42f), "CHOOSE YOUR SIDE", titleStyle);
 
             string prompt = isHost
-                ? "HOST: Click a box below! The remaining option will be given to the other player."
-                : "Waiting for the HOST to choose a box... You will receive the remaining side!";
-            GUI.Label(new Rect(centerX - 350f, centerY - 140f, 700f, 35f), prompt, subStyle);
+                ? "👑 HOST: Click a side below! The remaining role is automatically assigned to Player 2."
+                : "⏳ WAITING FOR HOST TO CHOOSE... (You will automatically receive the remaining side)";
+            GUI.Label(new Rect(centerX - 380f, centerY - 180f, 760f, 45f), prompt, subStyle);
 
-            // TWO BOXES: ONE PLANT AND ONE ZOMBIE
-            Rect plantBoxRect = new Rect(centerX - 330f, centerY - 80f, 300f, 240f);
-            Rect zombieBoxRect = new Rect(centerX + 30f, centerY - 80f, 300f, 240f);
+            // TWO ROLE CARDS: PLANT AND ZOMBIE
+            Rect plantBoxRect = new Rect(centerX - 390f, centerY - 120f, 370f, 280f);
+            Rect zombieBoxRect = new Rect(centerX + 20f, centerY - 120f, 370f, 280f);
 
-            GUI.backgroundColor = new Color(0.22f, 0.85f, 0.35f);
-            if (GUI.Button(plantBoxRect, "PLANT PLAYER\n\n(Defend the 5x8 Wall\n& Place Plants)", bigBtn))
+            GUI.backgroundColor = new Color(0.24f, 0.88f, 0.38f);
+            string plantText = "🌿 PLANT DEFENDER\n\n• Protect the 5x8 Garden Wall\n• Harvest Moons from sky & flowers\n• Place Roses to shoot Zombies\n• Place Durians to block lanes\n• Survive for 5:00 to Win!\n\n" + (isHost ? "[ CLICK TO CHOOSE PLANTS ]" : "[ HOST CHOOSES ]");
+            if (GUI.Button(plantBoxRect, plantText, bigBtn))
             {
                 if (isHost)
                 {
@@ -812,8 +1097,9 @@ public class MultiplayerMenuManager : MonoBehaviour
                 }
             }
 
-            GUI.backgroundColor = new Color(0.75f, 0.25f, 0.85f);
-            if (GUI.Button(zombieBoxRect, "ZOMBIE PLAYER\n\n(Attack the Wall\n& Command Zombies)", bigBtn))
+            GUI.backgroundColor = new Color(0.78f, 0.32f, 0.95f);
+            string zombieText = "🧟 ZOMBIE INVADER\n\n• Assault the Garden Perimeter\n• Earn Brains every 10 seconds\n• Deploy Zombies in right lanes\n• Cross the Red Line to Win!\n• Touch Plants to enter 3D Arena!\n\n" + (isHost ? "[ CLICK TO CHOOSE ZOMBIES ]" : "[ HOST CHOOSES ]");
+            if (GUI.Button(zombieBoxRect, zombieText, bigBtn))
             {
                 if (isHost)
                 {
@@ -831,12 +1117,17 @@ public class MultiplayerMenuManager : MonoBehaviour
             }
 
             PlayerRole otherRole = isHost ? joinerRole : hostRole;
-            string roleBanner = $"YOU: {localRole.ToString().ToUpper()}   |   OTHER: {otherRole.ToString().ToUpper()}";
+            string roleBanner = $"YOU: {localRole.ToString().ToUpper()}  |  OTHER: {otherRole.ToString().ToUpper()}";
 
-            DrawPanelBox(new Rect(sw - 380f, 14f, 366f, 44f), new Color(0.1f, 0.14f, 0.2f, 0.88f));
-            GUI.Label(new Rect(sw - 375f, 18f, 356f, 36f), roleBanner, subStyle);
+            Rect bannerRect = new Rect(sw - 235f, 12f, 220f, 34f);
+            DrawPanelBox(bannerRect, new Color(0.08f, 0.12f, 0.18f, 0.92f), new Color(0.35f, 0.75f, 1.0f, 0.75f));
 
-            if (GUI.Button(new Rect(sw - 160f, 64f, 146f, 32f), "Switch Role (Test)"))
+            GUIStyle bannerStyle = new GUIStyle(subStyle) { fontSize = 12, alignment = TextAnchor.MiddleCenter };
+            GUI.Label(new Rect(bannerRect.x + 6f, bannerRect.y + 4f, bannerRect.width - 12f, 26f), roleBanner, bannerStyle);
+
+            GUI.backgroundColor = new Color(0.35f, 0.75f, 0.95f);
+            GUIStyle switchBtnStyle = new GUIStyle(normalBtn) { fontSize = 11, fontStyle = FontStyle.Bold };
+            if (GUI.Button(new Rect(sw - 165f, 50f, 150f, 32f), "Switch Role (Test)", switchBtnStyle))
             {
                 localRole = (localRole == PlayerRole.Plant) ? PlayerRole.Zombie : PlayerRole.Plant;
                 if (gameplayWallGrid != null)
@@ -844,14 +1135,78 @@ public class MultiplayerMenuManager : MonoBehaviour
                     gameplayWallGrid.SetLocalRole(localRole);
                 }
             }
+            GUI.backgroundColor = Color.white;
         }
+    }
+
+    private void DrawHowToPlayModal(float sw, float sh, float centerX, float centerY)
+    {
+        // Dark dimming overlay
+        Color prev = GUI.color;
+        GUI.color = new Color(0.02f, 0.02f, 0.04f, 0.85f);
+        GUI.Box(new Rect(0f, 0f, sw, sh), GUIContent.none);
+        GUI.color = prev;
+
+        Rect modalRect = new Rect(centerX - 360f, centerY - 260f, 720f, 520f);
+        DrawPanelBox(modalRect, new Color(0.08f, 0.12f, 0.18f, 0.98f), new Color(0.35f, 0.85f, 1.0f, 0.9f));
+
+        GUIStyle titleStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 26,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        titleStyle.normal.textColor = new Color(0.45f, 0.95f, 0.65f);
+        GUI.Label(new Rect(centerX - 330f, centerY - 235f, 660f, 36f), "HOW TO PLAY & GAME RULES", titleStyle);
+
+        GUIStyle guideText = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 14,
+            wordWrap = true
+        };
+        guideText.normal.textColor = Color.white;
+
+        string guideContent =
+            "🌿 PLANT DEFENDER GOAL:\n" +
+            "• Protect the 5x8 garden wall for 5:00 minutes against the zombie onslaught.\n" +
+            "• Collect Moons falling from the sky or produced by Moonflowers.\n" +
+            "• [1] Moonflower (50 Moons): Produces 50 Moons every 15 seconds.\n" +
+            "• [2] Rose (100 Moons): Fires thorn darts whenever zombies enter its lane.\n" +
+            "• [3] Durian (50 Moons): High-HP armored defender that blocks zombie advances.\n\n" +
+            "🧟 ZOMBIE INVADER GOAL:\n" +
+            "• Earn Brains every 10 seconds. Spawn zombies in the rightmost 2 columns.\n" +
+            "• [4] Zombie (50 Brains): Walks forward toward the red defense line.\n" +
+            "• If any Zombie crosses the Red Defense Line on the left, Zombies Win!\n\n" +
+            "⚔️ 3D 1v1 ARENA CLASH:\n" +
+            "• When a Zombie collides with any Plant, the 2D world pauses immediately!\n" +
+            "• You are transported into a 3D first-person clash arena to fight!\n" +
+            "• Controls: WASD to Move & Tilt, Space to Jump, Backspace to return to 2D Wall.";
+
+        GUI.Label(new Rect(centerX - 330f, centerY - 185f, 660f, 340f), guideContent, guideText);
+
+        GUI.backgroundColor = new Color(0.24f, 0.88f, 0.38f);
+        GUIStyle btnStyle = new GUIStyle(GUI.skin.button) { fontSize = 16, fontStyle = FontStyle.Bold };
+        if (GUI.Button(new Rect(centerX - 130f, centerY + 185f, 260f, 48f), "GOT IT! CLOSE GUIDE", btnStyle))
+        {
+            showHowToPlayModal = false;
+        }
+        GUI.backgroundColor = Color.white;
+    }
+
+    private void DrawPanelBox(Rect rect, Color bg, Color border)
+    {
+        Color prev = GUI.color;
+        // Border outline
+        GUI.color = border;
+        GUI.Box(new Rect(rect.x - 2f, rect.y - 2f, rect.width + 4f, rect.height + 4f), GUIContent.none);
+        // Background card
+        GUI.color = bg;
+        GUI.Box(rect, GUIContent.none);
+        GUI.color = prev;
     }
 
     private void DrawPanelBox(Rect rect, Color color)
     {
-        Color prev = GUI.color;
-        GUI.color = color;
-        GUI.Box(rect, GUIContent.none);
-        GUI.color = prev;
+        DrawPanelBox(rect, color, new Color(0.35f, 0.65f, 0.95f, 0.6f));
     }
 }
