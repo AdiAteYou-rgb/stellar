@@ -59,6 +59,8 @@ public class MultiplayerMenuManager : MonoBehaviour
     private Thread networkThread;
     private volatile bool networkRunning;
     private readonly ConcurrentQueue<string> incomingMessages = new ConcurrentQueue<string>();
+    private int hostingPort = 7777;
+    private const string Base36Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     private Vector3 targetCameraPos;
 
@@ -87,6 +89,9 @@ public class MultiplayerMenuManager : MonoBehaviour
                 gameplayWallGrid.lockCameraToThisWall = false;
                 gameplayWallGrid.gameplayActive = false;
                 gameplayWallGrid.OnPlantPlacedLocal += HandleLocalPlantPlaced;
+                gameplayWallGrid.OnZombiePlacedLocal += HandleLocalZombiePlaced;
+                gameplayWallGrid.OnMatchEndedLocal += HandleLocalMatchEnded;
+                gameplayWallGrid.OnMatchRestartedLocal += HandleLocalMatchRestarted;
             }
             SnapCameraToMenuWall();
         }
@@ -97,6 +102,9 @@ public class MultiplayerMenuManager : MonoBehaviour
         if (gameplayWallGrid != null)
         {
             gameplayWallGrid.OnPlantPlacedLocal -= HandleLocalPlantPlaced;
+            gameplayWallGrid.OnZombiePlacedLocal -= HandleLocalZombiePlaced;
+            gameplayWallGrid.OnMatchEndedLocal -= HandleLocalMatchEnded;
+            gameplayWallGrid.OnMatchRestartedLocal -= HandleLocalMatchRestarted;
         }
         StopNetwork();
     }
@@ -185,15 +193,17 @@ public class MultiplayerMenuManager : MonoBehaviour
 
         try
         {
-            // Listen on an available port in range 7770..7869
-            int chosenPort = 7777;
-            for (int p = 7777; p < 7850; p++)
+            // Pick a random starting port in range 7200..8800 so ports aren't always 7777
+            int randomStart = UnityEngine.Random.Range(7200, 8800);
+            hostingPort = randomStart;
+            for (int i = 0; i < 200; i++)
             {
+                int p = 7100 + ((randomStart - 7100 + i) % 1800);
                 try
                 {
                     tcpServer = new TcpListener(IPAddress.Any, p);
                     tcpServer.Start();
-                    chosenPort = p;
+                    hostingPort = p;
                     break;
                 }
                 catch
@@ -202,7 +212,13 @@ public class MultiplayerMenuManager : MonoBehaviour
                 }
             }
 
-            hostJoinCode = EncodePortToCode(chosenPort);
+            if (tcpServer == null)
+            {
+                statusMessage = "Could not find an available port to host on!";
+                return;
+            }
+
+            hostJoinCode = GenerateRandomJoinCode(hostingPort);
             statusMessage = "Waiting for the other player to enter the code...";
             currentState = MenuState.HostingWaitingForPlayer;
 
@@ -230,7 +246,9 @@ public class MultiplayerMenuManager : MonoBehaviour
 
                 // Wait for joiner handshake with code verification
                 string line = netReader.ReadLine();
-                if (line != null && line == "JOIN:" + hostJoinCode)
+                if (line != null && line.StartsWith("JOIN:") &&
+                    (line.Substring(5).Trim().Equals(hostJoinCode, StringComparison.OrdinalIgnoreCase) ||
+                     (TryDecodeCodeToPort(line.Substring(5), out int p, out _) && p == hostingPort)))
                 {
                     netWriter.WriteLine("ACCEPTED");
                     incomingMessages.Enqueue("PLAYER_JOINED");
@@ -252,7 +270,7 @@ public class MultiplayerMenuManager : MonoBehaviour
 
     public void ConnectAsJoiner()
     {
-        string cleanCode = (enteredJoinCode ?? "").Trim().ToUpperInvariant();
+        string cleanCode = (enteredJoinCode ?? "").Trim().ToUpperInvariant().Replace(" ", "");
         if (string.IsNullOrEmpty(cleanCode))
         {
             statusMessage = "Please enter the code from the Host!";
@@ -372,14 +390,52 @@ public class MultiplayerMenuManager : MonoBehaviour
         else if (msg.StartsWith("PLACE:"))
         {
             string[] coords = msg.Substring("PLACE:".Length).Split(',');
-            if (coords.Length == 2 &&
+            if (coords.Length >= 2 &&
+                int.TryParse(coords[0], out int r) &&
+                int.TryParse(coords[1], out int c))
+            {
+                PlantType pType = PlantType.Moonflower;
+                if (coords.Length >= 3)
+                {
+                    Enum.TryParse(coords[2], out pType);
+                }
+
+                if (gameplayWallGrid != null)
+                {
+                    gameplayWallGrid.PlacePlantOnTile(r, c, pType, notifyNetwork: false);
+                }
+            }
+        }
+        else if (msg.StartsWith("ZOMBIE:"))
+        {
+            string[] coords = msg.Substring("ZOMBIE:".Length).Split(',');
+            if (coords.Length >= 2 &&
                 int.TryParse(coords[0], out int r) &&
                 int.TryParse(coords[1], out int c))
             {
                 if (gameplayWallGrid != null)
                 {
-                    gameplayWallGrid.PlacePlantOnTile(r, c, notifyNetwork: false);
+                    gameplayWallGrid.SpawnZombieOnTile(r, c, notifyNetwork: false);
                 }
+            }
+        }
+        else if (msg.StartsWith("WIN:"))
+        {
+            string winner = msg.Substring("WIN:".Length);
+            if (winner == "Plants" && gameplayWallGrid != null)
+            {
+                gameplayWallGrid.TriggerPlantsWin(notifyNetwork: false);
+            }
+            else if (winner == "Zombies" && gameplayWallGrid != null)
+            {
+                gameplayWallGrid.TriggerZombiesWin(notifyNetwork: false);
+            }
+        }
+        else if (msg == "RESTART")
+        {
+            if (gameplayWallGrid != null)
+            {
+                gameplayWallGrid.ResetMatch(notifyNetwork: false);
             }
         }
     }
@@ -435,39 +491,127 @@ public class MultiplayerMenuManager : MonoBehaviour
         if (gameplayWallGrid != null)
         {
             gameplayWallGrid.gameplayActive = true;
-            // Plant player can place plants on the 5x8 wall (also enabled if testing)
-            gameplayWallGrid.canPlacePlants = (localRole == PlayerRole.Plant);
+            gameplayWallGrid.SetLocalRole(localRole);
         }
     }
 
-    private void HandleLocalPlantPlaced(int row, int col)
+    private void HandleLocalPlantPlaced(int row, int col, PlantType type)
     {
-        SendNetworkMessage($"PLACE:{row},{col}");
+        SendNetworkMessage($"PLACE:{row},{col},{type}");
     }
 
-    // Encodes port (e.g. 7777) into a friendly 6-character code like "ST7777"
-    private string EncodePortToCode(int port)
+    private void HandleLocalZombiePlaced(int row, int col)
     {
-        return $"ST{port:D4}";
+        SendNetworkMessage($"ZOMBIE:{row},{col}");
     }
 
-    private bool TryDecodeCodeToPort(string input, out int port, out string hostIp)
+    private void HandleLocalMatchEnded(GridManager.MatchResult result)
+    {
+        string winner = (result == GridManager.MatchResult.PlantsWin) ? "Plants" : "Zombies";
+        SendNetworkMessage($"WIN:{winner}");
+    }
+
+    private void HandleLocalMatchRestarted()
+    {
+        SendNetworkMessage("RESTART");
+    }
+
+    private static int FeistelRound(int x)
+    {
+        return ((x * 20077 + 4919) ^ (x >> 5)) & 0x7FFF;
+    }
+
+    /// <summary>
+    /// Generates a random 6-character alphanumeric room code (Base-36) that encodes the host port with a random 19-bit salt.
+    /// Every time you click Host, a totally new, unique room code is generated (e.g. 97S2J4, Z6C5H1, 7LR3O6).
+    /// </summary>
+    public static string GenerateRandomJoinCode(int port)
+    {
+        int portOffset = Mathf.Clamp(port - 7100, 0, 0x7FF);
+        int salt = UnityEngine.Random.Range(0, 1 << 19);
+        int combined = (salt << 11) | (portOffset & 0x7FF);
+
+        int left = (combined >> 15) & 0x7FFF;
+        int right = combined & 0x7FFF;
+        int left1 = (left ^ FeistelRound(right)) & 0x7FFF;
+        int right1 = (right ^ FeistelRound(left1)) & 0x7FFF;
+        int scrambled = (left1 << 15) | right1;
+
+        char[] chars = new char[6];
+        int val = scrambled;
+        for (int i = 0; i < 6; i++)
+        {
+            chars[i] = Base36Alphabet[val % 36];
+            val /= 36;
+        }
+
+        return new string(chars);
+    }
+
+    /// <summary>
+    /// Decodes a 6-character room code back into the target port.
+    /// Also supports IP suffix (e.g. "97S2J4@192.168.1.5") and legacy "ST7777".
+    /// </summary>
+    public static bool TryDecodeCodeToPort(string input, out int port, out string hostIp)
     {
         hostIp = "127.0.0.1";
         port = 7777;
 
-        string codePart = input;
-        if (input.Contains("@"))
+        if (string.IsNullOrWhiteSpace(input))
         {
-            string[] split = input.Split('@');
-            codePart = split[0].Trim();
-            hostIp = split[1].Trim();
+            return false;
         }
 
-        if (codePart.StartsWith("ST") && codePart.Length == 6 && int.TryParse(codePart.Substring(2), out int parsedPort))
+        string clean = input.Trim().ToUpperInvariant().Replace(" ", "");
+        string codePart = clean;
+        if (clean.Contains("@"))
         {
-            port = parsedPort;
+            string[] split = clean.Split('@');
+            codePart = split[0].Trim();
+            if (split.Length > 1 && !string.IsNullOrWhiteSpace(split[1]))
+            {
+                hostIp = split[1].Trim();
+            }
+        }
+
+        // Backward compatibility for legacy STxxxx format
+        if (codePart.StartsWith("ST") && codePart.Length == 6 && int.TryParse(codePart.Substring(2), out int legacyPort))
+        {
+            port = legacyPort;
             return true;
+        }
+
+        // 6-character Base-36 random code
+        if (codePart.Length == 6)
+        {
+            long scrambled = 0;
+            long multiplier = 1;
+            for (int i = 0; i < 6; i++)
+            {
+                int index = Base36Alphabet.IndexOf(codePart[i]);
+                if (index < 0)
+                {
+                    return false;
+                }
+                scrambled += index * multiplier;
+                multiplier *= 36;
+            }
+
+            if (scrambled < 0 || scrambled >= (1L << 30))
+            {
+                return false;
+            }
+
+            int sc32 = (int)scrambled;
+            int left1 = (sc32 >> 15) & 0x7FFF;
+            int right1 = sc32 & 0x7FFF;
+            int right = (right1 ^ FeistelRound(left1)) & 0x7FFF;
+            int left = (left1 ^ FeistelRound(right)) & 0x7FFF;
+            int combined = (left << 15) | right;
+
+            int portOffset = combined & 0x7FF;
+            port = portOffset + 7100;
+            return port >= 7100 && port <= 9147;
         }
 
         return false;
@@ -681,18 +825,23 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
         else if (currentState == MenuState.Gameplay)
         {
+            if (gameplayWallGrid != null && gameplayWallGrid.is2DWorldPaused)
+            {
+                return;
+            }
+
             PlayerRole otherRole = isHost ? joinerRole : hostRole;
-            string roleBanner = $"YOU: {localRole.ToString().ToUpper()} PLAYER   |   OTHER PLAYER: {otherRole.ToString().ToUpper()} PLAYER";
+            string roleBanner = $"YOU: {localRole.ToString().ToUpper()}   |   OTHER: {otherRole.ToString().ToUpper()}";
 
-            DrawPanelBox(new Rect(sw - 540f, 20f, 520f, 54f), new Color(0.1f, 0.14f, 0.2f, 0.88f));
-            GUI.Label(new Rect(sw - 530f, 25f, 500f, 44f), roleBanner, subStyle);
+            DrawPanelBox(new Rect(sw - 380f, 14f, 366f, 44f), new Color(0.1f, 0.14f, 0.2f, 0.88f));
+            GUI.Label(new Rect(sw - 375f, 18f, 356f, 36f), roleBanner, subStyle);
 
-            if (GUI.Button(new Rect(sw - 160f, 82f, 140f, 34f), "Switch Role (Test)"))
+            if (GUI.Button(new Rect(sw - 160f, 64f, 146f, 32f), "Switch Role (Test)"))
             {
                 localRole = (localRole == PlayerRole.Plant) ? PlayerRole.Zombie : PlayerRole.Plant;
                 if (gameplayWallGrid != null)
                 {
-                    gameplayWallGrid.canPlacePlants = (localRole == PlayerRole.Plant);
+                    gameplayWallGrid.SetLocalRole(localRole);
                 }
             }
         }

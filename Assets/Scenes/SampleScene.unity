@@ -174,9 +174,9 @@ Camera:
   m_NormalizedViewPortRect:
     serializedVersion: 2
     x: 0
-    y: 0
+    y: 0.125
     width: 1
-    height: 1
+    height: 0.75
   near clip plane: 0.3
   far clip plane: 1000
   field of view: 60
@@ -481,6 +481,15 @@ MonoBehaviour:
   sprintMultiplier: 1.5
   jumpHeight: 1
   gravityValue: -9.81
+  landingSlowDuration: 0.5
+  landingSpeedMultiplier: 0.45
+  isFirstPersonArenaActive: 0
+  currentOpponentRoleName: OPPONENT
+  playerCamera: {fileID: 0}
+  mouseSensitivity: 2.2
+  eyeHeight: 0.72
+  strafeTiltAngle: 4.5
+  strafeTiltSpeed: 10
 --- !u!143 &972168360
 CharacterController:
   m_ObjectHideFlags: 0
@@ -893,6 +902,15 @@ MonoBehaviour:
   sprintMultiplier: 1.5
   jumpHeight: 1
   gravityValue: -9.81
+  landingSlowDuration: 0.5
+  landingSpeedMultiplier: 0.45
+  isFirstPersonArenaActive: 0
+  currentOpponentRoleName: OPPONENT
+  playerCamera: {fileID: 0}
+  mouseSensitivity: 2.2
+  eyeHeight: 0.72
+  strafeTiltAngle: 4.5
+  strafeTiltSpeed: 10
 --- !u!143 &1845926121
 CharacterController:
   m_ObjectHideFlags: 0
@@ -960,15 +978,40 @@ MonoBehaviour:
   cameraDistance: 10
   enforce16By9Viewport: 1
   lockCameraToThisWall: 0
+  localRole: 0
+  matchDuration: 300
+  matchTimeRemaining: 300
+  matchResult: 0
   gameplayActive: 1
   canPlacePlants: 1
-  plantPrefab: {fileID: 0}
+  canPlaceZombies: 1
+  is2DWorldPaused: 0
+  currentMoons: 100
+  skyMoonInterval: 15
+  skyMoonValue: 50
+  moonClusterPickupRadius: 3.2
+  moonflowerCost: 50
+  moonflowerCooldown: 5
+  rozeCost: 100
+  rozeCooldown: 5
+  durianCost: 50
+  durianCooldown: 30
+  currentBrains: 150
+  zombieCost: 50
+  zombieCooldown: 5
+  passiveBrainInterval: 10
+  passiveBrainAmount: 25
+  zombieAllowedColumnsFromRight: 2
   isPlantSelected: 0
+  selectedPlantType: 0
+  isZombieSelected: 0
+  clashZoomDuration: 1.35
+  clashTargetOrthoSize: 1.15
   tileColorLight: {r: 0.22, g: 0.42, b: 0.24, a: 1}
   tileColorDark: {r: 0.18, g: 0.36, b: 0.2, a: 1}
   tileHoverColor: {r: 0.45, g: 0.85, b: 0.45, a: 1}
+  tileZombieHoverColor: {r: 0.75, g: 0.35, b: 0.9, a: 1}
   tileOccupiedColor: {r: 0.75, g: 0.35, b: 0.25, a: 1}
-  plantPlaceholderColor: {r: 0.2, g: 0.9, b: 0.3, a: 1}
 --- !u!23 &2083793395
 MeshRenderer:
   m_ObjectHideFlags: 0
