@@ -113,7 +113,7 @@ public class WallZombie : MonoBehaviour
             if (touchedPlant != null)
             {
                 triggeredClash = true;
-                gridManager.TriggerZombiePlantClash(this, touchedPlant);
+                gridManager.TriggerZombiePlantClash(this, touchedPlant, touchedPlant.plantType, notifyNetwork: true);
                 return;
             }
         }

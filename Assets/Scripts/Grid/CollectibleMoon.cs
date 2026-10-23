@@ -6,6 +6,7 @@ public class CollectibleMoon : MonoBehaviour
     public static readonly List<CollectibleMoon> ActiveMoons = new List<CollectibleMoon>();
 
     public GridManager gridManager;
+    public int networkId = 0;
     public int moonValue = 50;
 
     [Header("Movement")]

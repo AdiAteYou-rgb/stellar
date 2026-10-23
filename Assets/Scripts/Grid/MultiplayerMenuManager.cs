@@ -98,6 +98,12 @@ public class MultiplayerMenuManager : MonoBehaviour
                 gameplayWallGrid.OnZombiePlacedLocal += HandleLocalZombiePlaced;
                 gameplayWallGrid.OnMatchEndedLocal += HandleLocalMatchEnded;
                 gameplayWallGrid.OnMatchRestartedLocal += HandleLocalMatchRestarted;
+                gameplayWallGrid.OnSkyMoonSpawnedLocal += HandleSkyMoonSpawned;
+                gameplayWallGrid.OnFlowerMoonSpawnedLocal += HandleFlowerMoonSpawned;
+                gameplayWallGrid.OnMoonsCollectedLocal += HandleMoonsCollected;
+                gameplayWallGrid.OnClashStartedLocal += HandleClashStarted;
+                gameplayWallGrid.OnArenaPoseLocal += HandleArenaPose;
+                gameplayWallGrid.OnArenaResolvedLocal += HandleArenaResolved;
             }
             SnapCameraToMenuWall();
         }
@@ -125,6 +131,12 @@ public class MultiplayerMenuManager : MonoBehaviour
             gameplayWallGrid.OnZombiePlacedLocal -= HandleLocalZombiePlaced;
             gameplayWallGrid.OnMatchEndedLocal -= HandleLocalMatchEnded;
             gameplayWallGrid.OnMatchRestartedLocal -= HandleLocalMatchRestarted;
+            gameplayWallGrid.OnSkyMoonSpawnedLocal -= HandleSkyMoonSpawned;
+            gameplayWallGrid.OnFlowerMoonSpawnedLocal -= HandleFlowerMoonSpawned;
+            gameplayWallGrid.OnMoonsCollectedLocal -= HandleMoonsCollected;
+            gameplayWallGrid.OnClashStartedLocal -= HandleClashStarted;
+            gameplayWallGrid.OnArenaPoseLocal -= HandleArenaPose;
+            gameplayWallGrid.OnArenaResolvedLocal -= HandleArenaResolved;
         }
         StopNetwork();
     }
@@ -178,6 +190,19 @@ public class MultiplayerMenuManager : MonoBehaviour
             ProcessNetworkMessage(msg);
         }
 
+        // Host decides the 3D 1v1 result: N = Zombie won, M = Plant won
+        if (isHost && gameplayWallGrid != null && gameplayWallGrid.IsIn3DArena)
+        {
+            if (Input.GetKeyDown(KeyCode.N))
+            {
+                gameplayWallGrid.ResolveArena(zombieWon: true);
+            }
+            else if (Input.GetKeyDown(KeyCode.M))
+            {
+                gameplayWallGrid.ResolveArena(zombieWon: false);
+            }
+        }
+
         // Smooth camera transport from MenuWall to Gameplay Wall
         if (mainCamera != null)
         {
@@ -192,7 +217,7 @@ public class MultiplayerMenuManager : MonoBehaviour
                 if (Vector3.Distance(mainCamera.transform.position, targetCameraPos) < 0.05f)
                 {
                     mainCamera.transform.position = targetCameraPos;
-                    currentState = MenuState.RoleSelection;
+                    currentState = (localRole == PlayerRole.None) ? MenuState.RoleSelection : MenuState.Gameplay;
                 }
             }
             else if (currentState == MenuState.MainMenu ||
@@ -463,6 +488,113 @@ public class MultiplayerMenuManager : MonoBehaviour
                 gameplayWallGrid.ResetMatch(notifyNetwork: false);
             }
         }
+        else if (gameplayWallGrid != null)
+        {
+            ProcessSyncMessage(msg);
+        }
+    }
+
+    // ==================== MOON / CLASH / ARENA SYNC ====================
+
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+    private static string F(float v) => v.ToString("0.###", Inv);
+    private static float PF(string s) => float.Parse(s, Inv);
+
+    private void ProcessSyncMessage(string msg)
+    {
+        try
+        {
+            if (msg.StartsWith("MOONSKY:"))
+            {
+                // id,x,y,z,landY,value
+                string[] p = msg.Substring(8).Split(',');
+                gameplayWallGrid.SpawnSkyMoonWithId(int.Parse(p[0]),
+                    new Vector3(PF(p[1]), PF(p[2]), PF(p[3])), PF(p[4]), int.Parse(p[5]));
+            }
+            else if (msg.StartsWith("MOONFLW:"))
+            {
+                // id,x,y,z,value
+                string[] p = msg.Substring(8).Split(',');
+                gameplayWallGrid.SpawnFlowerMoonWithId(int.Parse(p[0]),
+                    new Vector3(PF(p[1]), PF(p[2]), PF(p[3])), int.Parse(p[4]));
+            }
+            else if (msg.StartsWith("MOONGET:"))
+            {
+                var ids = new System.Collections.Generic.List<int>();
+                foreach (string s in msg.Substring(8).Split(','))
+                {
+                    if (int.TryParse(s, out int id)) ids.Add(id);
+                }
+                gameplayWallGrid.RemoveMoonsRemote(ids);
+            }
+            else if (msg.StartsWith("CLASH:"))
+            {
+                string[] p = msg.Substring(6).Split(',');
+                int r = int.Parse(p[0]);
+                int c = int.Parse(p[1]);
+                PlantType pType = PlantType.Rose;
+                if (p.Length >= 3 && Enum.TryParse(p[2], out PlantType pt)) pType = pt;
+                PlayerRole remoteRole = PlayerRole.None;
+                if (p.Length >= 4 && Enum.TryParse(p[3], out PlayerRole rr)) remoteRole = rr;
+
+                // Sync local role from remote peer's role if needed
+                if (remoteRole == PlayerRole.Zombie && localRole != PlayerRole.Plant)
+                {
+                    localRole = PlayerRole.Plant;
+                    if (gameplayWallGrid != null) gameplayWallGrid.SetLocalRole(PlayerRole.Plant);
+                }
+                else if (remoteRole == PlayerRole.Plant && localRole != PlayerRole.Zombie)
+                {
+                    localRole = PlayerRole.Zombie;
+                    if (gameplayWallGrid != null) gameplayWallGrid.SetLocalRole(PlayerRole.Zombie);
+                }
+
+                gameplayWallGrid.TriggerRemoteClash(r, c, pType, remoteRole);
+            }
+            else if (msg.StartsWith("APOSE:"))
+            {
+                string[] p = msg.Substring(6).Split(',');
+                gameplayWallGrid.SetRemoteArenaPose(new Vector3(PF(p[0]), PF(p[1]), PF(p[2])), PF(p[3]));
+            }
+            else if (msg.StartsWith("ARESULT:"))
+            {
+                gameplayWallGrid.ResolveArena(msg.Substring(8) == "Z", notifyNetwork: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Bad sync message '{msg}': {ex.Message}");
+        }
+    }
+
+    private void HandleSkyMoonSpawned(int id, Vector3 start, float landY, int value)
+    {
+        SendNetworkMessage($"MOONSKY:{id},{F(start.x)},{F(start.y)},{F(start.z)},{F(landY)},{value}");
+    }
+
+    private void HandleFlowerMoonSpawned(int id, Vector3 pos, int value)
+    {
+        SendNetworkMessage($"MOONFLW:{id},{F(pos.x)},{F(pos.y)},{F(pos.z)},{value}");
+    }
+
+    private void HandleMoonsCollected(System.Collections.Generic.List<int> ids)
+    {
+        SendNetworkMessage("MOONGET:" + string.Join(",", ids));
+    }
+
+    private void HandleClashStarted(int row, int col, PlantType pType, PlayerRole role)
+    {
+        SendNetworkMessage($"CLASH:{row},{col},{pType},{role}");
+    }
+
+    private void HandleArenaPose(Vector3 pos, float yaw)
+    {
+        SendNetworkMessage($"APOSE:{F(pos.x)},{F(pos.y)},{F(pos.z)},{F(yaw)}");
+    }
+
+    private void HandleArenaResolved(bool zombieWon)
+    {
+        SendNetworkMessage("ARESULT:" + (zombieWon ? "Z" : "P"));
     }
 
     public void BeginTransportToGameplayWall()
@@ -511,7 +643,15 @@ public class MultiplayerMenuManager : MonoBehaviour
         joinerRole = jRole;
         localRole = isHost ? hostRole : joinerRole;
 
-        currentState = MenuState.Gameplay;
+        if (currentState != MenuState.TransportingToGameWall)
+        {
+            currentState = MenuState.Gameplay;
+        }
+
+        if (gameplayWallGrid == null)
+        {
+            gameplayWallGrid = FindFirstObjectByType<GridManager>();
+        }
 
         if (gameplayWallGrid != null)
         {

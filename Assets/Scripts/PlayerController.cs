@@ -23,6 +23,7 @@ public class PlayerController : MonoBehaviour
 
     [Header("First-Person Camera & Strafe Tilt")]
     public bool isFirstPersonArenaActive = false;
+    [HideInInspector] public bool inputFrozen = false;
     public string currentOpponentRoleName = "OPPONENT";
     public Camera playerCamera;
     [SerializeField] private float mouseSensitivity = 2.2f;
@@ -107,6 +108,12 @@ public class PlayerController : MonoBehaviour
         // Only process 3D player movement when in the 3D 1v1 Arena (or if no GridManager is active)
         GridManager grid = FindFirstObjectByType<GridManager>();
         if (grid != null && !isFirstPersonArenaActive)
+        {
+            return;
+        }
+
+        // Frozen during the "ZOMBIE WON / PLANT WON" pause
+        if (inputFrozen)
         {
             return;
         }

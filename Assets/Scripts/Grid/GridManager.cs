@@ -107,6 +107,32 @@ public class GridManager : MonoBehaviour
     public event Action<int, int, PlantType> OnPlantPlacedLocal;
     public event Action<int, int> OnZombiePlacedLocal;
 
+    // ===== Network sync events (moons, clash, 3D arena) =====
+    public event Action<int, Vector3, float, int> OnSkyMoonSpawnedLocal;      // id, startPos, landingY, value
+    public event Action<int, Vector3, int> OnFlowerMoonSpawnedLocal;           // id, flowerPos, value
+    public event Action<System.Collections.Generic.List<int>> OnMoonsCollectedLocal;
+    public event Action<int, int, PlantType, MultiplayerMenuManager.PlayerRole> OnClashStartedLocal; // plant row, col, plantType, senderRole
+    public event Action<Vector3, float> OnArenaPoseLocal;                      // position, yaw
+    public event Action<bool> OnArenaResolvedLocal;                            // true = zombie won
+
+    private int nextMoonId = 1;
+    public bool IsIn3DArena => isIn3DArena;
+    /// <summary>Only the Plant player (or solo) spawns moons; the Zombie player receives them over the network.</summary>
+    public bool IsMoonAuthority => GetEffectiveLocalRole() != MultiplayerMenuManager.PlayerRole.Zombie;
+
+    // 3D arena remote player avatar
+    private GameObject remoteArenaAvatar;
+    private Vector3 remoteArenaTargetPos;
+    private float remoteArenaTargetYaw;
+    private bool hasRemoteArenaPose = false;
+    private float arenaPoseSendTimer = 0f;
+
+    // Arena result (host presses N / M)
+    private bool arenaResolving = false;
+    private bool arenaZombieWon = false;
+    private float arenaResolveTimer = 0f;
+    public float arenaResultPauseDuration = 2.5f;
+
     private readonly float[] cooldownTimers = new float[3];
     private PlaceholderPlant[,] placedPlants;
     private Renderer[,] tileRenderers;
@@ -361,9 +387,36 @@ public class GridManager : MonoBehaviour
         // Handle 3D 1v1 Arena active state (Backspace returns to the 2D Wall)
         if (isIn3DArena)
         {
-            if (Input.GetKeyDown(KeyCode.Backspace))
+            UpdateArenaNetworking();
+
+            if (arenaResolving)
             {
-                Exit3DArenaBackTo2DWall();
+                arenaResolveTimer -= Time.deltaTime;
+                if (arenaResolveTimer <= 0f)
+                {
+                    FinishArenaResolution();
+                }
+            }
+            else
+            {
+                MultiplayerMenuManager menu = FindFirstObjectByType<MultiplayerMenuManager>();
+                bool isHostOrSolo = menu == null || menu.isHost || menu.localRole == MultiplayerMenuManager.PlayerRole.None;
+                if (isHostOrSolo)
+                {
+                    if (Input.GetKeyDown(KeyCode.N))
+                    {
+                        ResolveArena(zombieWon: true, notifyNetwork: true);
+                    }
+                    else if (Input.GetKeyDown(KeyCode.M))
+                    {
+                        ResolveArena(zombieWon: false, notifyNetwork: true);
+                    }
+                }
+
+                if (Input.GetKeyDown(KeyCode.Backspace))
+                {
+                    Exit3DArenaBackTo2DWall();
+                }
             }
             return;
         }
@@ -425,7 +478,7 @@ public class GridManager : MonoBehaviour
 
         // Sky Moon Spawner: Every 15 seconds, a Moon falls from the top of the wall
         skyMoonTimer += Time.deltaTime;
-        if (skyMoonTimer >= skyMoonInterval)
+        if (skyMoonTimer >= skyMoonInterval && IsMoonAuthority)
         {
             skyMoonTimer = 0f;
             SpawnSkyFallingMoon();
@@ -512,11 +565,78 @@ public class GridManager : MonoBehaviour
         return null;
     }
 
-    public void TriggerZombiePlantClash(WallZombie zombie, PlaceholderPlant plant)
+    private int clashingPlantRow = -1;
+    private int clashingPlantCol = -1;
+    private PlantType clashingPlantType = PlantType.Rose;
+
+    public MultiplayerMenuManager.PlayerRole EffectiveRole => GetEffectiveLocalRole();
+
+    public MultiplayerMenuManager.PlayerRole GetEffectiveLocalRole()
+    {
+        if (localRole != MultiplayerMenuManager.PlayerRole.None)
+        {
+            return localRole;
+        }
+
+        MultiplayerMenuManager menu = FindFirstObjectByType<MultiplayerMenuManager>();
+        if (menu != null)
+        {
+            if (menu.localRole != MultiplayerMenuManager.PlayerRole.None)
+            {
+                localRole = menu.localRole;
+                return localRole;
+            }
+            if (menu.isHost)
+            {
+                if (menu.hostRole != MultiplayerMenuManager.PlayerRole.None)
+                {
+                    localRole = menu.hostRole;
+                    return localRole;
+                }
+                // Host default is Plant
+                localRole = MultiplayerMenuManager.PlayerRole.Plant;
+                return localRole;
+            }
+            else
+            {
+                if (menu.joinerRole != MultiplayerMenuManager.PlayerRole.None)
+                {
+                    localRole = menu.joinerRole;
+                    return localRole;
+                }
+                // Joiner default is Zombie
+                localRole = MultiplayerMenuManager.PlayerRole.Zombie;
+                return localRole;
+            }
+        }
+
+        return localRole;
+    }
+
+    public void TriggerZombiePlantClash(WallZombie zombie, PlaceholderPlant plant, bool notifyNetwork = true)
+    {
+        PlantType pType = (plant != null) ? plant.plantType : PlantType.Rose;
+        TriggerZombiePlantClash(zombie, plant, pType, notifyNetwork);
+    }
+
+    public void TriggerZombiePlantClash(WallZombie zombie, PlaceholderPlant plant, PlantType fallbackType, bool notifyNetwork = true)
     {
         if (is2DWorldPaused || isZoomingIntoClash || isIn3DArena)
         {
             return;
+        }
+
+        PlantType pType = (plant != null) ? plant.plantType : fallbackType;
+        int r = (plant != null) ? plant.row : (zombie != null ? zombie.row : 0);
+        int c = (plant != null) ? plant.column : 0;
+
+        clashingPlantRow = r;
+        clashingPlantCol = c;
+        clashingPlantType = pType;
+
+        if (notifyNetwork)
+        {
+            OnClashStartedLocal?.Invoke(r, c, pType, GetEffectiveLocalRole());
         }
 
         // 1. Pause the entire 2D world
@@ -535,12 +655,57 @@ public class GridManager : MonoBehaviour
             clashZoomStartCamPos = targetCamera.transform.position;
             clashZoomStartOrthoSize = targetCamera.orthographicSize;
 
-            Vector3 midpoint = (zombie.transform.position + plant.transform.position) * 0.5f;
+            Vector3 zPos = zombie != null ? zombie.transform.position : (plant != null ? plant.transform.position : transform.position);
+            Vector3 pPos = plant != null ? plant.transform.position : zPos;
+            Vector3 midpoint = (zPos + pPos) * 0.5f;
             clashZoomTargetCamPos = new Vector3(midpoint.x, midpoint.y, clashZoomStartCamPos.z);
         }
 
         clashZoomTimer = 0f;
         isZoomingIntoClash = true;
+    }
+
+    /// <summary>Called when the other player reports a clash, so both players enter the 3D arena together.</summary>
+    public void TriggerRemoteClash(int row, int col)
+    {
+        TriggerRemoteClash(row, col, PlantType.Rose, MultiplayerMenuManager.PlayerRole.None);
+    }
+
+    public void TriggerRemoteClash(int row, int col, PlantType plantType, MultiplayerMenuManager.PlayerRole remoteInitiatorRole = MultiplayerMenuManager.PlayerRole.None)
+    {
+        clashingPlantRow = row;
+        clashingPlantCol = col;
+        clashingPlantType = plantType;
+
+        // Auto-reconcile local role if remote role was specified
+        if (remoteInitiatorRole == MultiplayerMenuManager.PlayerRole.Zombie)
+        {
+            SetLocalRole(MultiplayerMenuManager.PlayerRole.Plant);
+        }
+        else if (remoteInitiatorRole == MultiplayerMenuManager.PlayerRole.Plant)
+        {
+            SetLocalRole(MultiplayerMenuManager.PlayerRole.Zombie);
+        }
+
+        PlaceholderPlant plant = null;
+        if (placedPlants != null && row >= 0 && row < rows && col >= 0 && col < columns)
+        {
+            plant = placedPlants[row, col];
+        }
+
+        // Find the zombie in that row closest to the plant
+        WallZombie best = null;
+        float bestDist = float.MaxValue;
+        Vector3 refPos = plant != null ? plant.transform.position : GetTileWorldPosition(row, col, 0f);
+        for (int i = 0; i < WallZombie.ActiveZombies.Count; i++)
+        {
+            WallZombie z = WallZombie.ActiveZombies[i];
+            if (z == null || z.row != row) continue;
+            float d = Mathf.Abs(z.transform.position.x - refPos.x);
+            if (d < bestDist) { bestDist = d; best = z; }
+        }
+
+        TriggerZombiePlantClash(best, plant, plantType, notifyNetwork: false);
     }
 
     private void UpdateClashZoomAnimation()
@@ -592,36 +757,167 @@ public class GridManager : MonoBehaviour
     public void Enter3D1v1Arena()
     {
         isIn3DArena = true;
+        arenaResolving = false;
+        arenaPoseSendTimer = 0f;
 
-        // Ensure 3D Arena environment exists with appropriate opponent (Plant or Zombie)
+        // Ensure 3D Arena environment exists with the remote opponent avatar (Plant or Zombie)
         BuildOrShow3DArenaEnvironment();
 
-        // Find the main PlayerController (avoid duplicate child controller if present)
+        MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
+        bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
+        Vector3 arenaSpawnPos = isZombie ? ArenaZombieSpawn : ArenaPlantSpawn;
+        Quaternion arenaSpawnRot = Quaternion.Euler(0f, isZombie ? 180f : 0f, 0f);
+
         PlayerController chosenPlayer = GetPrimaryPlayerController();
         if (chosenPlayer != null && targetCamera != null)
         {
-            Vector3 arenaSpawnPos = new Vector3(0f, 1.5f, -26.0f);
-            Quaternion arenaSpawnRot = Quaternion.Euler(0f, 0f, 0f);
-
+            chosenPlayer.inputFrozen = false;
             chosenPlayer.EnterFirstPersonArena(targetCamera, arenaSpawnPos, arenaSpawnRot, currentArenaOpponentName);
         }
     }
 
+    private static readonly Vector3 ArenaPlantSpawn = new Vector3(0f, 1.5f, -30.0f);
+    private static readonly Vector3 ArenaZombieSpawn = new Vector3(0f, 1.5f, -14.0f);
+
+    /// <summary>Host decides the 1v1 result (N = zombie won, M = plant won). Shows a banner + pause, then returns to 2D.</summary>
+    public void ResolveArena(bool zombieWon, bool notifyNetwork = true)
+    {
+        if (arenaResolving) return;
+        if (!isIn3DArena && !isZoomingIntoClash) return;
+
+        if (notifyNetwork)
+        {
+            OnArenaResolvedLocal?.Invoke(zombieWon);
+        }
+
+        if (isZoomingIntoClash)
+        {
+            // Result arrived before our zoom finished: jump straight into the arena so the banner shows
+            isZoomingIntoClash = false;
+            Enter3D1v1Arena();
+        }
+
+        arenaResolving = true;
+        arenaZombieWon = zombieWon;
+        arenaResolveTimer = arenaResultPauseDuration;
+
+        PlayerController pc = GetPrimaryPlayerController();
+        if (pc != null) pc.inputFrozen = true;
+    }
+
+    private void FinishArenaResolution()
+    {
+        arenaResolving = false;
+
+        if (arenaZombieWon)
+        {
+            // Zombie won: the targeted plant is removed, the zombie keeps walking
+            if (clashingPlantRow >= 0 && clashingPlantRow < rows && clashingPlantCol >= 0 && clashingPlantCol < columns)
+            {
+                if (placedPlants != null && placedPlants[clashingPlantRow, clashingPlantCol] != null)
+                {
+                    Destroy(placedPlants[clashingPlantRow, clashingPlantCol].gameObject);
+                    placedPlants[clashingPlantRow, clashingPlantCol] = null;
+                }
+            }
+            if (clashingPlant != null)
+            {
+                int r = clashingPlant.row, c = clashingPlant.column;
+                if (placedPlants != null && r >= 0 && r < rows && c >= 0 && c < columns && placedPlants[r, c] == clashingPlant)
+                {
+                    placedPlants[r, c] = null;
+                }
+                Destroy(clashingPlant.gameObject);
+                clashingPlant = null;
+            }
+            Exit3DArenaBackTo2DWall(destroyZombie: false);
+        }
+        else
+        {
+            // Plant won: the zombie is removed, the plant stays
+            clashingPlant = null;
+            Exit3DArenaBackTo2DWall(destroyZombie: true);
+        }
+    }
+
+    private void UpdateArenaNetworking()
+    {
+        // Send our pose ~20x per second
+        PlayerController pc = GetPrimaryPlayerController();
+        arenaPoseSendTimer -= Time.deltaTime;
+        if (pc != null && arenaPoseSendTimer <= 0f)
+        {
+            arenaPoseSendTimer = 0.05f;
+            OnArenaPoseLocal?.Invoke(pc.transform.position, pc.transform.eulerAngles.y);
+        }
+
+        // Smoothly move the remote avatar towards the latest received pose
+        if (remoteArenaAvatar != null && hasRemoteArenaPose)
+        {
+            Transform t = remoteArenaAvatar.transform;
+            t.position = Vector3.Lerp(t.position, remoteArenaTargetPos, Time.deltaTime * 15f);
+            t.rotation = Quaternion.Slerp(t.rotation, Quaternion.Euler(0f, remoteArenaTargetYaw, 0f), Time.deltaTime * 15f);
+        }
+    }
+
+    public void SetRemoteArenaPose(Vector3 pos, float yaw)
+    {
+        remoteArenaTargetPos = pos;
+        remoteArenaTargetYaw = yaw;
+        if (!hasRemoteArenaPose && remoteArenaAvatar != null)
+        {
+            remoteArenaAvatar.transform.SetPositionAndRotation(pos, Quaternion.Euler(0f, yaw, 0f));
+        }
+        hasRemoteArenaPose = true;
+    }
+
     public void Exit3DArenaBackTo2DWall()
+    {
+        Exit3DArenaBackTo2DWall(destroyZombie: true);
+    }
+
+    public void Exit3DArenaBackTo2DWall(bool destroyZombie)
     {
         isIn3DArena = false;
         isZoomingIntoClash = false;
+        arenaResolving = false;
+        hasRemoteArenaPose = false;
+
+        if (arena3DRoot != null)
+        {
+            Destroy(arena3DRoot);
+            arena3DRoot = null;
+            remoteArenaAvatar = null;
+        }
 
         // Remove the clashing zombie so it doesn't immediately re-trigger on the exact same frame
-        if (clashingZombie != null)
+        if (destroyZombie)
         {
-            Destroy(clashingZombie.gameObject);
-            clashingZombie = null;
+            if (clashingZombie != null)
+            {
+                Destroy(clashingZombie.gameObject);
+            }
+            else if (clashingPlantRow >= 0)
+            {
+                Vector3 refPos = GetTileWorldPosition(clashingPlantRow, clashingPlantCol, 0f);
+                WallZombie best = null;
+                float bestDist = float.MaxValue;
+                for (int i = 0; i < WallZombie.ActiveZombies.Count; i++)
+                {
+                    WallZombie z = WallZombie.ActiveZombies[i];
+                    if (z == null || z.row != clashingPlantRow) continue;
+                    float d = Mathf.Abs(z.transform.position.x - refPos.x);
+                    if (d < bestDist) { bestDist = d; best = z; }
+                }
+                if (best != null) Destroy(best.gameObject);
+            }
         }
+        clashingZombie = null;
 
         PlayerController chosenPlayer = GetPrimaryPlayerController();
         if (chosenPlayer != null)
         {
+            chosenPlayer.inputFrozen = false;
             chosenPlayer.ExitFirstPersonArena();
         }
 
@@ -792,47 +1088,68 @@ public class GridManager : MonoBehaviour
         CreateArenaBlock("Pillar_Left", new Vector3(-4.0f, 1.2f, 0f), new Vector3(1.5f, 2.4f, 1.5f), new Color(0.45f, 0.52f, 0.48f));
         CreateArenaBlock("Pillar_Right", new Vector3(4.0f, 1.2f, 0f), new Vector3(1.5f, 2.4f, 1.5f), new Color(0.45f, 0.52f, 0.48f));
 
-        // Spawn appropriate 3D Opponent to fight:
-        // Requirement: "whatever plant i touch i have to fight thats specific plant"
-        // If local player is Zombie (or solo testing non-Plant): fight the EXACT plant that was touched!
-        // If local player is Plant: fight the Zombie Boss!
-        GameObject opponent;
-        if (localRole == MultiplayerMenuManager.PlayerRole.Plant)
+        // Spawn the OTHER player's avatar (synced over the network) with a real hitbox.
+        // Plant player sees the Zombie; Zombie player sees the specific plant that was touched.
+        MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
+        bool localIsPlant = myRole == MultiplayerMenuManager.PlayerRole.Plant;
+        PlantType touchedType = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+
+        remoteArenaAvatar = new GameObject("Arena3D_RemotePlayer");
+        remoteArenaAvatar.transform.SetParent(arena3DRoot.transform, false);
+        Vector3 remoteSpawn = localIsPlant ? ArenaZombieSpawn : ArenaPlantSpawn;
+        remoteArenaAvatar.transform.SetPositionAndRotation(remoteSpawn, Quaternion.Euler(0f, localIsPlant ? 180f : 0f, 0f));
+
+        // Hitbox: capsule matching the player's CharacterController size, kinematic rigidbody so it registers hits/triggers
+        CapsuleCollider hitbox = remoteArenaAvatar.AddComponent<CapsuleCollider>();
+        hitbox.height = 2.0f;
+        hitbox.radius = 0.5f;
+        hitbox.center = Vector3.zero;
+        Rigidbody rb = remoteArenaAvatar.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
+
+        GameObject visual;
+        if (localIsPlant)
         {
-            // Plant player fights the clashing Zombie Boss
-            opponent = CreateZombieVisual("Arena3D_ZombieBoss", isGhost: false);
-            opponent.transform.localScale = new Vector3(2.2f, 2.2f, 2.2f);
-            opponent.transform.localRotation = Quaternion.Euler(0f, 90f, 0f); // Arms pointing forward towards player
-            currentArenaOpponentName = "GIANT ZOMBIE";
+            visual = CreateZombieVisual("Visual_Zombie", isGhost: false);
+            currentArenaOpponentName = "ZOMBIE PLAYER";
         }
         else
         {
-            // Zombie player fights the specific plant that was touched!
-            PlantType touchedType = (clashingPlant != null) ? clashingPlant.plantType : PlantType.Moonflower;
-            currentArenaOpponentName = $"GIANT {touchedType.ToString().ToUpper()}";
-
-            switch (touchedType)
-            {
-                case PlantType.Moonflower:
-                    opponent = CreatePlantVisual(PlantType.Moonflower, "Arena3D_MoonflowerBoss", isGhost: false);
-                    opponent.transform.localScale = new Vector3(2.5f, 2.5f, 2.5f);
-                    opponent.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // Face the arena
-                    break;
-                case PlantType.Rose:
-                    opponent = CreatePlantVisual(PlantType.Rose, "Arena3D_RoseBoss", isGhost: false);
-                    opponent.transform.localScale = new Vector3(2.5f, 2.5f, 2.5f);
-                    opponent.transform.localRotation = Quaternion.Euler(0f, 0f, 0f);
-                    break;
-                case PlantType.Durian:
-                default:
-                    opponent = CreatePlantVisual(PlantType.Durian, "Arena3D_DurianBoss", isGhost: false);
-                    opponent.transform.localScale = new Vector3(2.6f, 2.6f, 2.6f);
-                    opponent.transform.localRotation = Quaternion.Euler(0f, 0f, 0f);
-                    break;
-            }
+            visual = CreatePlantVisual(touchedType, $"Visual_{touchedType}", isGhost: false);
+            currentArenaOpponentName = $"{touchedType.ToString().ToUpper()} PLAYER";
         }
-        opponent.transform.SetParent(arena3DRoot.transform, false);
-        opponent.transform.localPosition = new Vector3(0f, 1.3f, 5.5f);
+
+        // Strip any colliders on the visual so only the capsule hitbox is used
+        foreach (Collider c in visual.GetComponentsInChildren<Collider>())
+        {
+            Destroy(c);
+        }
+        visual.transform.SetParent(remoteArenaAvatar.transform, false);
+        visual.transform.localPosition = new Vector3(0f, -0.1f, 0f);
+        visual.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // flat 2D art faces the avatar's forward
+        visual.transform.localScale = Vector3.one * 1.1f;
+
+        // Mirror copy on the back so the texture is visible from every side
+        GameObject back = Instantiate(visual, remoteArenaAvatar.transform, false);
+        back.name = visual.name + "_Back";
+        back.transform.localRotation = Quaternion.identity;
+        foreach (MonoBehaviour mb in back.GetComponentsInChildren<MonoBehaviour>())
+        {
+            mb.enabled = false;
+        }
+
+        // Floating name tag above the opponent
+        GameObject tagObj = new GameObject("NameTag");
+        tagObj.transform.SetParent(remoteArenaAvatar.transform, false);
+        tagObj.transform.localPosition = new Vector3(0f, 1.6f, 0f);
+        TextMesh tm = tagObj.AddComponent<TextMesh>();
+        tm.text = currentArenaOpponentName;
+        tm.characterSize = 0.08f;
+        tm.fontSize = 48;
+        tm.anchor = TextAnchor.MiddleCenter;
+        tm.color = localIsPlant ? new Color(0.75f, 0.4f, 1f) : new Color(0.5f, 1f, 0.5f);
+        tagObj.AddComponent<FaceCameraBillboard>();
     }
 
     private void CreateArenaBlock(string name, Vector3 localPos, Vector3 scale, Color color)
@@ -984,6 +1301,14 @@ public class GridManager : MonoBehaviour
         );
         float z = transform.position.z - (wallThickness * 0.5f) - 0.45f;
 
+        int id = nextMoonId++;
+        Vector3 startPos = new Vector3(randomX, startY, z);
+        SpawnSkyMoonWithId(id, startPos, landingY, skyMoonValue);
+        OnSkyMoonSpawnedLocal?.Invoke(id, startPos, landingY, skyMoonValue);
+    }
+
+    public void SpawnSkyMoonWithId(int id, Vector3 startPos, float landingY, int value)
+    {
         GameObject moonObj = CreateMoonVisual("SkyMoon");
         if (tilesContainer != null)
         {
@@ -991,10 +1316,21 @@ public class GridManager : MonoBehaviour
         }
 
         CollectibleMoon moon = moonObj.AddComponent<CollectibleMoon>();
-        moon.SetupSkyFall(this, new Vector3(randomX, startY, z), new Vector3(randomX, landingY, z), skyMoonValue);
+        moon.networkId = id;
+        moon.SetupSkyFall(this, startPos, new Vector3(startPos.x, landingY, startPos.z), value);
     }
 
     public void SpawnMoonFromFlower(Vector3 flowerWorldPos, int amount = 50)
+    {
+        // Only the moon authority (Plant player) creates moons; the other player gets them over the network
+        if (!IsMoonAuthority) return;
+
+        int id = nextMoonId++;
+        SpawnFlowerMoonWithId(id, flowerWorldPos, amount);
+        OnFlowerMoonSpawnedLocal?.Invoke(id, flowerWorldPos, amount);
+    }
+
+    public void SpawnFlowerMoonWithId(int id, Vector3 flowerWorldPos, int amount)
     {
         GameObject moonObj = CreateMoonVisual("MoonflowerMoon");
         if (tilesContainer != null)
@@ -1003,7 +1339,21 @@ public class GridManager : MonoBehaviour
         }
 
         CollectibleMoon moon = moonObj.AddComponent<CollectibleMoon>();
+        moon.networkId = id;
         moon.SetupMoonflowerDrop(this, flowerWorldPos + new Vector3(0f, 0.2f, -0.2f), amount);
+    }
+
+    /// <summary>The Plant player picked these moons up: remove them from this (Zombie) view.</summary>
+    public void RemoveMoonsRemote(System.Collections.Generic.List<int> ids)
+    {
+        for (int i = CollectibleMoon.ActiveMoons.Count - 1; i >= 0; i--)
+        {
+            CollectibleMoon m = CollectibleMoon.ActiveMoons[i];
+            if (m != null && ids.Contains(m.networkId))
+            {
+                Destroy(m.gameObject);
+            }
+        }
     }
 
     public void SpawnRoseProjectile(int row, Vector3 spawnPos)
@@ -1080,6 +1430,7 @@ public class GridManager : MonoBehaviour
 
         // Collect the clicked moon AND all moons around it so you never have to spam-click!
         Vector2 centerPos = new Vector2(primaryMoon.transform.position.x, primaryMoon.transform.position.y);
+        var collectedIds = new System.Collections.Generic.List<int>();
         for (int i = CollectibleMoon.ActiveMoons.Count - 1; i >= 0; i--)
         {
             CollectibleMoon moon = CollectibleMoon.ActiveMoons[i];
@@ -1097,7 +1448,13 @@ public class GridManager : MonoBehaviour
             if (distToCluster <= moonClusterPickupRadius || distToClick <= moonClusterPickupRadius)
             {
                 moon.Collect();
+                collectedIds.Add(moon.networkId);
             }
+        }
+
+        if (collectedIds.Count > 0)
+        {
+            OnMoonsCollectedLocal?.Invoke(collectedIds);
         }
 
         return true;
@@ -1472,8 +1829,24 @@ public class GridManager : MonoBehaviour
             arenaHud.normal.textColor = Color.white;
             GUI.backgroundColor = new Color(0.1f, 0.14f, 0.22f, 0.85f);
             GUI.Box(new Rect(20f, 20f, 480f, 58f),
-                $"3D 1v1 ARENA vs {currentArenaOpponentName} (2D World Paused)\nWASD: Move + Camera Tilt | Space: Jump (0.5s Landing Impact) | Backspace: Return to 2D",
+                $"3D 1v1 ARENA vs {currentArenaOpponentName} (2D World Paused)\nWASD: Move + Camera Tilt | Space: Jump | Host: N = Zombie won, M = Plant won",
                 arenaHud);
+
+            if (arenaResolving)
+            {
+                GUIStyle winStyle = new GUIStyle(GUI.skin.box)
+                {
+                    fontSize = 46,
+                    fontStyle = FontStyle.Bold,
+                    alignment = TextAnchor.MiddleCenter
+                };
+                winStyle.normal.textColor = arenaZombieWon ? new Color(0.8f, 0.45f, 1f) : new Color(0.5f, 1f, 0.45f);
+                GUI.backgroundColor = new Color(0f, 0f, 0f, 0.85f);
+                float pulse = 1f + Mathf.Sin(Time.time * 8f) * 0.04f;
+                float w = 560f * pulse, h = 130f * pulse;
+                GUI.Box(new Rect(Screen.width * 0.5f - w * 0.5f, Screen.height * 0.5f - h * 0.5f, w, h),
+                    arenaZombieWon ? "ZOMBIE WON!" : "PLANT WON!", winStyle);
+            }
             GUI.backgroundColor = prevBg;
             return;
         }
