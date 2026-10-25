@@ -104,6 +104,8 @@ public class MultiplayerMenuManager : MonoBehaviour
                 gameplayWallGrid.OnClashStartedLocal += HandleClashStarted;
                 gameplayWallGrid.OnArenaPoseLocal += HandleArenaPose;
                 gameplayWallGrid.OnArenaResolvedLocal += HandleArenaResolved;
+                gameplayWallGrid.OnArenaStunLocal += HandleArenaStun;
+                gameplayWallGrid.OnArenaAbilityFxLocal += HandleArenaAbilityFx;
             }
             SnapCameraToMenuWall();
         }
@@ -137,6 +139,8 @@ public class MultiplayerMenuManager : MonoBehaviour
             gameplayWallGrid.OnClashStartedLocal -= HandleClashStarted;
             gameplayWallGrid.OnArenaPoseLocal -= HandleArenaPose;
             gameplayWallGrid.OnArenaResolvedLocal -= HandleArenaResolved;
+            gameplayWallGrid.OnArenaStunLocal -= HandleArenaStun;
+            gameplayWallGrid.OnArenaAbilityFxLocal -= HandleArenaAbilityFx;
         }
         StopNetwork();
     }
@@ -560,6 +564,23 @@ public class MultiplayerMenuManager : MonoBehaviour
             {
                 gameplayWallGrid.ResolveArena(msg.Substring(8) == "Z", notifyNetwork: false);
             }
+            else if (msg.StartsWith("ASTUN:"))
+            {
+                float dur = PF(msg.Substring(6));
+                gameplayWallGrid.ApplyLocalArenaImmobilize(dur);
+            }
+            else if (msg.StartsWith("AFX:"))
+            {
+                string[] p = msg.Substring(4).Split(',');
+                if (p.Length >= 7)
+                {
+                    gameplayWallGrid.SpawnRemoteArenaAbilityFx(
+                        p[0],
+                        new Vector3(PF(p[1]), PF(p[2]), PF(p[3])),
+                        new Vector3(PF(p[4]), PF(p[5]), PF(p[6]))
+                    );
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -595,6 +616,16 @@ public class MultiplayerMenuManager : MonoBehaviour
     private void HandleArenaResolved(bool zombieWon)
     {
         SendNetworkMessage("ARESULT:" + (zombieWon ? "Z" : "P"));
+    }
+
+    private void HandleArenaStun(float duration)
+    {
+        SendNetworkMessage($"ASTUN:{F(duration)}");
+    }
+
+    private void HandleArenaAbilityFx(string fxType, Vector3 start, Vector3 end)
+    {
+        SendNetworkMessage($"AFX:{fxType},{F(start.x)},{F(start.y)},{F(start.z)},{F(end.x)},{F(end.y)},{F(end.z)}");
     }
 
     public void BeginTransportToGameplayWall()

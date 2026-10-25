@@ -114,6 +114,8 @@ public class GridManager : MonoBehaviour
     public event Action<int, int, PlantType, MultiplayerMenuManager.PlayerRole> OnClashStartedLocal; // plant row, col, plantType, senderRole
     public event Action<Vector3, float> OnArenaPoseLocal;                      // position, yaw
     public event Action<bool> OnArenaResolvedLocal;                            // true = zombie won
+    public event Action<float> OnArenaStunLocal;                               // duration in seconds (Durian immobilize)
+    public event Action<string, Vector3, Vector3> OnArenaAbilityFxLocal;       // fxType, startPos, endPos
 
     private int nextMoonId = 1;
     public bool IsIn3DArena => isIn3DArena;
@@ -126,6 +128,37 @@ public class GridManager : MonoBehaviour
     private float remoteArenaTargetYaw;
     private bool hasRemoteArenaPose = false;
     private float arenaPoseSendTimer = 0f;
+
+    // 3D Arena HP, Hitboxes, Abilities & Hit Indicator State
+    private int localArenaMaxHP = 100;
+    private int localArenaCurrentHP = 100;
+    private int remoteArenaMaxHP = 150;
+    private int remoteArenaCurrentHP = 150;
+    private Transform remoteHpBarFill;
+    private Renderer remoteHpBarFillRenderer;
+    private Color remoteHpBarBaseColor = Color.green;
+
+    private int arenaHitsLanded = 0;
+    private float arenaHitIndicatorTimer = 0f;
+    private string arenaLastHitLabel = "HIT!";
+    private float remoteHitFlashTimer = 0f;
+    private float remoteImmobilizedTimer = 0f;
+
+    // Ability timers
+    private float arenaAbilityCooldownTimer = 0f;
+    private bool isChargingMoonBeam = false;
+    private float moonBeamChargeTimer = 0f;
+    public float moonBeamChargeDuration = 2.0f;
+    private GameObject localMoonChargeOrb;
+
+    private bool isChargingRoseThorn = false;
+    private float roseThornChargeTimer = 0f;
+    public float roseThornChargeDuration = 0.4f;
+
+    private bool isDurianRollingLocal = false;
+    private float durianRollTimer = 0f;
+    public float durianRollDuration = 2.6f;
+    private GameObject localDurianRollVisual;
 
     // Arena result (host presses N / M)
     private bool arenaResolving = false;
@@ -399,6 +432,8 @@ public class GridManager : MonoBehaviour
             }
             else
             {
+                UpdateArenaCombat();
+
                 MultiplayerMenuManager menu = FindFirstObjectByType<MultiplayerMenuManager>();
                 bool isHostOrSolo = menu == null || menu.isHost || menu.localRole == MultiplayerMenuManager.PlayerRole.None;
                 if (isHostOrSolo)
@@ -760,11 +795,32 @@ public class GridManager : MonoBehaviour
         arenaResolving = false;
         arenaPoseSendTimer = 0f;
 
+        MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
+        bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
+        PlantType activePlant = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+        clashingPlantType = activePlant;
+
+        // Reset 3D Arena HP & combat states (attacks count as hits without reducing HP)
+        localArenaMaxHP = isZombie ? 150 : GetPlantMaxArenaHP(activePlant);
+        localArenaCurrentHP = localArenaMaxHP;
+        remoteArenaMaxHP = isZombie ? GetPlantMaxArenaHP(activePlant) : 150;
+        remoteArenaCurrentHP = remoteArenaMaxHP;
+
+        arenaHitsLanded = 0;
+        arenaHitIndicatorTimer = 0f;
+        remoteHitFlashTimer = 0f;
+        remoteImmobilizedTimer = 0f;
+        arenaAbilityCooldownTimer = 0f;
+        isChargingMoonBeam = false;
+        moonBeamChargeTimer = 0f;
+        isChargingRoseThorn = false;
+        roseThornChargeTimer = 0f;
+        isDurianRollingLocal = false;
+        durianRollTimer = 0f;
+
         // Ensure 3D Arena environment exists with the remote opponent avatar (Plant or Zombie)
         BuildOrShow3DArenaEnvironment();
 
-        MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
-        bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
         Vector3 arenaSpawnPos = isZombie ? ArenaZombieSpawn : ArenaPlantSpawn;
         Quaternion arenaSpawnRot = Quaternion.Euler(0f, isZombie ? 180f : 0f, 0f);
 
@@ -776,7 +832,12 @@ public class GridManager : MonoBehaviour
         }
     }
 
-    private static readonly Vector3 ArenaPlantSpawn = new Vector3(0f, 1.5f, -30.0f);
+    private int GetPlantMaxArenaHP(PlantType type)
+    {
+        return (type == PlantType.Durian) ? 400 : 100;
+    }
+
+    private static readonly Vector3 ArenaPlantSpawn = new Vector3(0f, 1.5f, -38.0f);
     private static readonly Vector3 ArenaZombieSpawn = new Vector3(0f, 1.5f, -14.0f);
 
     /// <summary>Host decides the 1v1 result (N = zombie won, M = plant won). Shows a banner + pause, then returns to 2D.</summary>
@@ -851,8 +912,8 @@ public class GridManager : MonoBehaviour
             OnArenaPoseLocal?.Invoke(pc.transform.position, pc.transform.eulerAngles.y);
         }
 
-        // Smoothly move the remote avatar towards the latest received pose
-        if (remoteArenaAvatar != null && hasRemoteArenaPose)
+        // Smoothly move the remote avatar towards the latest received pose (unless immobilized by Durian)
+        if (remoteArenaAvatar != null && hasRemoteArenaPose && remoteImmobilizedTimer <= 0f)
         {
             Transform t = remoteArenaAvatar.transform;
             t.position = Vector3.Lerp(t.position, remoteArenaTargetPos, Time.deltaTime * 15f);
@@ -871,6 +932,419 @@ public class GridManager : MonoBehaviour
         hasRemoteArenaPose = true;
     }
 
+    public void ApplyLocalArenaImmobilize(float duration)
+    {
+        PlayerController pc = GetPrimaryPlayerController();
+        if (pc != null)
+        {
+            pc.Immobilize(duration);
+            CancelAllActiveArenaAbilities(pc);
+        }
+    }
+
+    private void CancelAllActiveArenaAbilities(PlayerController pc)
+    {
+        isChargingMoonBeam = false;
+        moonBeamChargeTimer = 0f;
+        if (localMoonChargeOrb != null)
+        {
+            Destroy(localMoonChargeOrb);
+            localMoonChargeOrb = null;
+        }
+
+        isChargingRoseThorn = false;
+        roseThornChargeTimer = 0f;
+
+        isDurianRollingLocal = false;
+        durianRollTimer = 0f;
+        if (pc != null) pc.isDurianRolling = false;
+        if (localDurianRollVisual != null)
+        {
+            Destroy(localDurianRollVisual);
+            localDurianRollVisual = null;
+        }
+    }
+
+    private void UpdateArenaCombat()
+    {
+        PlayerController pc = GetPrimaryPlayerController();
+        if (pc == null) return;
+        if (targetCamera == null) targetCamera = Camera.main;
+
+        if (arenaHitIndicatorTimer > 0f)
+        {
+            arenaHitIndicatorTimer = Mathf.Max(0f, arenaHitIndicatorTimer - Time.deltaTime);
+        }
+
+        if (remoteImmobilizedTimer > 0f)
+        {
+            remoteImmobilizedTimer = Mathf.Max(0f, remoteImmobilizedTimer - Time.deltaTime);
+        }
+
+        if (remoteHitFlashTimer > 0f)
+        {
+            remoteHitFlashTimer = Mathf.Max(0f, remoteHitFlashTimer - Time.deltaTime);
+            if (remoteHpBarFillRenderer != null)
+            {
+                remoteHpBarFillRenderer.material.color = (remoteHitFlashTimer > 0f)
+                    ? new Color(1.0f, 0.95f, 0.35f)
+                    : remoteHpBarBaseColor;
+            }
+        }
+
+        if (arenaAbilityCooldownTimer > 0f)
+        {
+            arenaAbilityCooldownTimer = Mathf.Max(0f, arenaAbilityCooldownTimer - Time.deltaTime);
+        }
+
+        // If immobilized by Durian roll, cancel active charges and block all attacks & abilities!
+        if (pc.IsImmobilized)
+        {
+            CancelAllActiveArenaAbilities(pc);
+            return;
+        }
+
+        MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
+        bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
+        PlantType activePlant = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+
+        // 1. Tick active Moonflower 2.0s Moon Beam Charge
+        if (isChargingMoonBeam)
+        {
+            moonBeamChargeTimer -= Time.deltaTime;
+            float progress = 1.0f - Mathf.Clamp01(moonBeamChargeTimer / Mathf.Max(0.01f, moonBeamChargeDuration));
+
+            if (localMoonChargeOrb == null && arena3DRoot != null)
+            {
+                localMoonChargeOrb = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                localMoonChargeOrb.name = "MoonBeamChargeOrb";
+                localMoonChargeOrb.transform.SetParent(arena3DRoot.transform, true);
+                DestroyCollider(localMoonChargeOrb);
+                localMoonChargeOrb.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.45f, 0.95f, 1.0f));
+            }
+
+            if (localMoonChargeOrb != null && targetCamera != null)
+            {
+                // Hover over the Moonflower's head (slightly forward so player also sees the glow above their view)
+                Vector3 orbPos = pc.transform.position + new Vector3(0f, 1.32f, 0f) + targetCamera.transform.forward * 0.42f;
+                localMoonChargeOrb.transform.position = orbPos;
+                float orbScale = Mathf.Lerp(0.18f, 0.68f, progress) + Mathf.Sin(Time.time * 18f) * 0.03f;
+                localMoonChargeOrb.transform.localScale = Vector3.one * orbScale;
+            }
+
+            if (moonBeamChargeTimer <= 0f)
+            {
+                isChargingMoonBeam = false;
+                if (localMoonChargeOrb != null)
+                {
+                    Destroy(localMoonChargeOrb);
+                    localMoonChargeOrb = null;
+                }
+                FireMoonflowerLaserBeam(pc);
+            }
+            return;
+        }
+
+        // 2. Tick active Rose 0.4s Hitscan Thorn Charge
+        if (isChargingRoseThorn)
+        {
+            roseThornChargeTimer -= Time.deltaTime;
+            if (roseThornChargeTimer <= 0f)
+            {
+                isChargingRoseThorn = false;
+                FireRoseHitscanThorn(pc);
+            }
+            return;
+        }
+
+        // 3. Tick active Durian Roll Attack
+        if (isDurianRollingLocal)
+        {
+            durianRollTimer -= Time.deltaTime;
+            pc.isDurianRolling = true;
+
+            if (localDurianRollVisual == null && arena3DRoot != null)
+            {
+                localDurianRollVisual = Create3DPlantPlaceholder(PlantType.Durian, "DurianRollVisual");
+                localDurianRollVisual.transform.SetParent(arena3DRoot.transform, true);
+                foreach (Collider c in localDurianRollVisual.GetComponentsInChildren<Collider>())
+                {
+                    Destroy(c);
+                }
+            }
+
+            if (localDurianRollVisual != null)
+            {
+                localDurianRollVisual.transform.position = pc.transform.position + new Vector3(0f, -0.35f, 0f) + pc.transform.forward * 0.55f;
+                localDurianRollVisual.transform.rotation = Quaternion.Euler(Time.time * 720f, pc.transform.eulerAngles.y, 0f);
+                localDurianRollVisual.transform.localScale = Vector3.one * 0.65f;
+            }
+
+            // Check if Durian connects with the Zombie opponent!
+            if (remoteArenaAvatar != null)
+            {
+                Vector3 a = new Vector3(pc.transform.position.x, 0f, pc.transform.position.z);
+                Vector3 b = new Vector3(remoteArenaAvatar.transform.position.x, 0f, remoteArenaAvatar.transform.position.z);
+                float horizDist = Vector3.Distance(a, b);
+                float vertDist = Mathf.Abs(pc.transform.position.y - remoteArenaAvatar.transform.position.y);
+
+                if (horizDist <= 1.95f && vertDist <= 2.2f)
+                {
+                    // Connected! Immobilize and stop the Zombie player's attacks & abilities for 2 seconds!
+                    StopDurianRoll(pc);
+                    arenaAbilityCooldownTimer = 1.2f;
+                    remoteImmobilizedTimer = 2.0f;
+                    OnArenaStunLocal?.Invoke(2.0f);
+                    RegisterArenaHit("DURIAN CONNECTED! ZOMBIE IMMOBILIZED (2.0s)!");
+                    return;
+                }
+            }
+
+            if (durianRollTimer <= 0f)
+            {
+                StopDurianRoll(pc);
+                arenaAbilityCooldownTimer = 0.8f;
+            }
+            return;
+        }
+
+        // 4. Trigger Attack / Special Ability on Left Click (while cursor locked) or E key
+        bool triggerPressed = (Input.GetMouseButtonDown(0) && Cursor.lockState == CursorLockMode.Locked)
+                              || Input.GetKeyDown(KeyCode.E);
+
+        if (!triggerPressed || arenaAbilityCooldownTimer > 0f)
+        {
+            return;
+        }
+
+        if (isZombie)
+        {
+            PerformZombieMeleeSlash(pc);
+        }
+        else
+        {
+            if (activePlant == PlantType.Moonflower)
+            {
+                isChargingMoonBeam = true;
+                moonBeamChargeTimer = moonBeamChargeDuration;
+            }
+            else if (activePlant == PlantType.Rose || activePlant == PlantType.Roze)
+            {
+                isChargingRoseThorn = true;
+                roseThornChargeTimer = roseThornChargeDuration;
+            }
+            else if (activePlant == PlantType.Durian)
+            {
+                isDurianRollingLocal = true;
+                durianRollTimer = durianRollDuration;
+                pc.isDurianRolling = true;
+                OnArenaAbilityFxLocal?.Invoke("ROLL", pc.transform.position, pc.transform.forward);
+            }
+        }
+    }
+
+    private void StopDurianRoll(PlayerController pc)
+    {
+        isDurianRollingLocal = false;
+        durianRollTimer = 0f;
+        if (pc != null) pc.isDurianRolling = false;
+        if (localDurianRollVisual != null)
+        {
+            Destroy(localDurianRollVisual);
+            localDurianRollVisual = null;
+        }
+    }
+
+    private void FireMoonflowerLaserBeam(PlayerController pc)
+    {
+        arenaAbilityCooldownTimer = 1.0f;
+        if (targetCamera == null) targetCamera = Camera.main;
+        if (targetCamera == null) return;
+
+        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        Vector3 beamStart = pc.transform.position + new Vector3(0f, 1.25f, 0f) + targetCamera.transform.forward * 0.35f;
+
+        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.55f, 65f, out Vector3 hitPoint);
+        Spawn3DBeamEffect(beamStart, hitPoint, new Color(0.25f, 0.95f, 1.0f), 0.28f, 0.45f);
+        OnArenaAbilityFxLocal?.Invoke("BEAM", beamStart, hitPoint);
+
+        if (hitOpponent)
+        {
+            RegisterArenaHit("MOON BEAM CONNECTED!");
+        }
+    }
+
+    private void FireRoseHitscanThorn(PlayerController pc)
+    {
+        arenaAbilityCooldownTimer = 0.35f;
+        if (targetCamera == null) targetCamera = Camera.main;
+        if (targetCamera == null) return;
+
+        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        Vector3 shotStart = pc.transform.position + new Vector3(0f, 0.52f, 0f) + targetCamera.transform.forward * 0.45f + targetCamera.transform.right * 0.18f;
+
+        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.32f, 65f, out Vector3 hitPoint);
+        Spawn3DBeamEffect(shotStart, hitPoint, new Color(1.0f, 0.15f, 0.38f), 0.10f, 0.22f);
+        OnArenaAbilityFxLocal?.Invoke("THORN", shotStart, hitPoint);
+
+        if (hitOpponent)
+        {
+            RegisterArenaHit("ROSE HITSCAN THORN CONNECTED!");
+        }
+    }
+
+    private void PerformZombieMeleeSlash(PlayerController pc)
+    {
+        arenaAbilityCooldownTimer = 0.55f;
+        if (targetCamera == null) targetCamera = Camera.main;
+        if (targetCamera == null) return;
+
+        Vector3 slashCenter = targetCamera.transform.position + targetCamera.transform.forward * 1.15f;
+        Spawn3DSlashEffect(slashCenter, targetCamera.transform.rotation);
+        OnArenaAbilityFxLocal?.Invoke("SLASH", slashCenter, targetCamera.transform.forward);
+
+        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.85f, 3.6f, out _);
+
+        if (!hitOpponent && remoteArenaAvatar != null)
+        {
+            Vector3 toOpp = remoteArenaAvatar.transform.position - pc.transform.position;
+            float dist = toOpp.magnitude;
+            float angle = Vector3.Angle(targetCamera.transform.forward, toOpp);
+            if (dist <= 3.6f && angle <= 58f)
+            {
+                hitOpponent = true;
+            }
+        }
+
+        if (hitOpponent)
+        {
+            RegisterArenaHit("ZOMBIE MELEE SLASH CONNECTED!");
+        }
+    }
+
+    private bool CheckCursorRayHitOpponent(Ray aimRay, float sphereRadius, float maxDist, out Vector3 endPoint)
+    {
+        endPoint = aimRay.GetPoint(maxDist);
+        bool hitOpponent = false;
+        float closestEnvDist = maxDist;
+
+        // First find closest environment obstacle along ray
+        RaycastHit[] directHits = Physics.RaycastAll(aimRay, maxDist);
+        for (int i = 0; i < directHits.Length; i++)
+        {
+            Collider c = directHits[i].collider;
+            if (c == null) continue;
+            if (c.GetComponent<PlayerController>() != null) continue;
+
+            if (IsOpponentHitbox(c))
+            {
+                if (directHits[i].distance <= closestEnvDist)
+                {
+                    hitOpponent = true;
+                    endPoint = directHits[i].point;
+                    closestEnvDist = directHits[i].distance;
+                }
+            }
+            else if (directHits[i].distance < closestEnvDist)
+            {
+                closestEnvDist = directHits[i].distance;
+                if (!hitOpponent) endPoint = directHits[i].point;
+            }
+        }
+
+        if (hitOpponent)
+        {
+            return true;
+        }
+
+        // Also check generous spherecast along the cursor ray for the opponent's hitbox
+        RaycastHit[] sphereHits = Physics.SphereCastAll(aimRay, sphereRadius, closestEnvDist);
+        for (int i = 0; i < sphereHits.Length; i++)
+        {
+            if (IsOpponentHitbox(sphereHits[i].collider))
+            {
+                endPoint = sphereHits[i].point != Vector3.zero ? sphereHits[i].point : remoteArenaAvatar.transform.position;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsOpponentHitbox(Collider col)
+    {
+        if (col == null || remoteArenaAvatar == null) return false;
+        return col.transform == remoteArenaAvatar.transform || col.transform.IsChildOf(remoteArenaAvatar.transform);
+    }
+
+    private void RegisterArenaHit(string label)
+    {
+        // Note: Attacks do not reduce HP for now; they count as a hit and trigger the Hit Indicator!
+        arenaHitsLanded++;
+        arenaHitIndicatorTimer = 0.95f;
+        arenaLastHitLabel = label;
+        remoteHitFlashTimer = 0.25f;
+    }
+
+    public void SpawnRemoteArenaAbilityFx(string fxType, Vector3 startPos, Vector3 endPos)
+    {
+        if (!isIn3DArena || arena3DRoot == null) return;
+
+        if (fxType == "BEAM")
+        {
+            Spawn3DBeamEffect(startPos, endPos, new Color(0.25f, 0.95f, 1.0f), 0.28f, 0.45f);
+        }
+        else if (fxType == "THORN")
+        {
+            Spawn3DBeamEffect(startPos, endPos, new Color(1.0f, 0.15f, 0.38f), 0.10f, 0.22f);
+        }
+        else if (fxType == "SLASH")
+        {
+            Quaternion rot = endPos.sqrMagnitude > 0.001f ? Quaternion.LookRotation(endPos) : Quaternion.identity;
+            Spawn3DSlashEffect(startPos, rot);
+        }
+    }
+
+    private void Spawn3DBeamEffect(Vector3 start, Vector3 end, Color color, float thickness, float duration)
+    {
+        if (arena3DRoot == null) return;
+        Vector3 diff = end - start;
+        float len = diff.magnitude;
+        if (len < 0.05f) return;
+
+        GameObject beam = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        beam.name = "ArenaBeamFX";
+        beam.transform.SetParent(arena3DRoot.transform, true);
+        beam.transform.position = start + diff * 0.5f;
+        beam.transform.up = diff.normalized;
+        beam.transform.localScale = new Vector3(thickness, len * 0.5f, thickness);
+        DestroyCollider(beam);
+        beam.GetComponent<Renderer>().material = CreateColoredMaterial(color);
+        Destroy(beam, duration);
+    }
+
+    private void Spawn3DSlashEffect(Vector3 center, Quaternion viewRot)
+    {
+        if (arena3DRoot == null) return;
+        GameObject slashRoot = new GameObject("ZombieSlashFX");
+        slashRoot.transform.SetParent(arena3DRoot.transform, true);
+        slashRoot.transform.SetPositionAndRotation(center, viewRot);
+
+        for (int i = -1; i <= 1; i++)
+        {
+            GameObject claw = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            claw.transform.SetParent(slashRoot.transform, false);
+            claw.transform.localPosition = new Vector3(i * 0.22f, 0f, 0f);
+            claw.transform.localRotation = Quaternion.Euler(0f, 0f, -35f);
+            claw.transform.localScale = new Vector3(0.08f, 0.95f, 0.08f);
+            DestroyCollider(claw);
+            claw.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.85f, 0.35f, 1.0f));
+        }
+
+        Destroy(slashRoot, 0.20f);
+    }
+
     public void Exit3DArenaBackTo2DWall()
     {
         Exit3DArenaBackTo2DWall(destroyZombie: true);
@@ -878,6 +1352,9 @@ public class GridManager : MonoBehaviour
 
     public void Exit3DArenaBackTo2DWall(bool destroyZombie)
     {
+        PlayerController chosenPlayer = GetPrimaryPlayerController();
+        CancelAllActiveArenaAbilities(chosenPlayer);
+
         isIn3DArena = false;
         isZoomingIntoClash = false;
         arenaResolving = false;
@@ -888,6 +1365,8 @@ public class GridManager : MonoBehaviour
             Destroy(arena3DRoot);
             arena3DRoot = null;
             remoteArenaAvatar = null;
+            remoteHpBarFill = null;
+            remoteHpBarFillRenderer = null;
         }
 
         // Remove the clashing zombie so it doesn't immediately re-trigger on the exact same frame
@@ -914,7 +1393,6 @@ public class GridManager : MonoBehaviour
         }
         clashingZombie = null;
 
-        PlayerController chosenPlayer = GetPrimaryPlayerController();
         if (chosenPlayer != null)
         {
             chosenPlayer.inputFrozen = false;
@@ -1067,28 +1545,36 @@ public class GridManager : MonoBehaviour
         }
 
         arena3DRoot = new GameObject("Arena3D_1v1");
-        Vector3 arenaCenter = new Vector3(0f, 0f, -22.0f);
+        Vector3 arenaCenter = new Vector3(0f, 0f, -26.0f);
         arena3DRoot.transform.position = arenaCenter;
 
-        // Large 3D Arena Floor
+        // Expanded 3D Arena Floor (44 x 44)
         GameObject floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
         floor.name = "ArenaFloor";
         floor.transform.SetParent(arena3DRoot.transform, false);
         floor.transform.localPosition = new Vector3(0f, -0.25f, 0f);
-        floor.transform.localScale = new Vector3(24f, 0.5f, 24f);
+        floor.transform.localScale = new Vector3(44f, 0.5f, 44f);
         floor.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.22f, 0.28f, 0.24f));
 
-        // 4 Low Arena Walls / Obstacles for depth perception when jumping & tilting
-        CreateArenaBlock("Wall_North", new Vector3(0f, 1.5f, 12f), new Vector3(24f, 3f, 0.6f), new Color(0.32f, 0.36f, 0.42f));
-        CreateArenaBlock("Wall_South", new Vector3(0f, 1.5f, -12f), new Vector3(24f, 3f, 0.6f), new Color(0.32f, 0.36f, 0.42f));
-        CreateArenaBlock("Wall_East", new Vector3(12f, 1.5f, 0f), new Vector3(0.6f, 3f, 24f), new Color(0.32f, 0.36f, 0.42f));
-        CreateArenaBlock("Wall_West", new Vector3(-12f, 1.5f, 0f), new Vector3(0.6f, 3f, 24f), new Color(0.32f, 0.36f, 0.42f));
+        // 4 Outer Perimeter Arena Walls
+        CreateArenaBlock("Wall_North", new Vector3(0f, 1.75f, 22f), new Vector3(44f, 3.5f, 0.8f), new Color(0.32f, 0.36f, 0.42f));
+        CreateArenaBlock("Wall_South", new Vector3(0f, 1.75f, -22f), new Vector3(44f, 3.5f, 0.8f), new Color(0.32f, 0.36f, 0.42f));
+        CreateArenaBlock("Wall_East", new Vector3(22f, 1.75f, 0f), new Vector3(0.8f, 3.5f, 44f), new Color(0.32f, 0.36f, 0.42f));
+        CreateArenaBlock("Wall_West", new Vector3(-22f, 1.75f, 0f), new Vector3(0.8f, 3.5f, 44f), new Color(0.32f, 0.36f, 0.42f));
 
-        // Cover pillars inside the arena
-        CreateArenaBlock("Pillar_Left", new Vector3(-4.0f, 1.2f, 0f), new Vector3(1.5f, 2.4f, 1.5f), new Color(0.45f, 0.52f, 0.48f));
-        CreateArenaBlock("Pillar_Right", new Vector3(4.0f, 1.2f, 0f), new Vector3(1.5f, 2.4f, 1.5f), new Color(0.45f, 0.52f, 0.48f));
+        // Cover pillars & new tactical obstacles inside the expanded arena
+        CreateArenaBlock("Pillar_Left", new Vector3(-5.5f, 1.4f, 0f), new Vector3(1.8f, 2.8f, 1.8f), new Color(0.45f, 0.52f, 0.48f));
+        CreateArenaBlock("Pillar_Right", new Vector3(5.5f, 1.4f, 0f), new Vector3(1.8f, 2.8f, 1.8f), new Color(0.45f, 0.52f, 0.48f));
 
-        // Spawn the OTHER player's avatar (synced over the network) with a real hitbox.
+        CreateArenaBlock("Cover_NW", new Vector3(-9.5f, 0.85f, 7.0f), new Vector3(2.8f, 1.7f, 1.0f), new Color(0.38f, 0.44f, 0.40f));
+        CreateArenaBlock("Cover_NE", new Vector3(9.5f, 0.85f, 7.0f), new Vector3(2.8f, 1.7f, 1.0f), new Color(0.38f, 0.44f, 0.40f));
+        CreateArenaBlock("Cover_SW", new Vector3(-9.5f, 0.85f, -7.0f), new Vector3(2.8f, 1.7f, 1.0f), new Color(0.38f, 0.44f, 0.40f));
+        CreateArenaBlock("Cover_SE", new Vector3(9.5f, 0.85f, -7.0f), new Vector3(2.8f, 1.7f, 1.0f), new Color(0.38f, 0.44f, 0.40f));
+
+        CreateArenaBlock("Crate_West", new Vector3(-14.0f, 0.6f, 0f), new Vector3(2.4f, 1.2f, 2.8f), new Color(0.48f, 0.36f, 0.24f));
+        CreateArenaBlock("Crate_East", new Vector3(14.0f, 0.6f, 0f), new Vector3(2.4f, 1.2f, 2.8f), new Color(0.48f, 0.36f, 0.24f));
+
+        // Spawn the OTHER player's avatar (synced over the network) with accurate hitboxes.
         // Plant player sees the Zombie; Zombie player sees the specific plant that was touched.
         MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
         bool localIsPlant = myRole == MultiplayerMenuManager.PlayerRole.Plant;
@@ -1099,11 +1585,16 @@ public class GridManager : MonoBehaviour
         Vector3 remoteSpawn = localIsPlant ? ArenaZombieSpawn : ArenaPlantSpawn;
         remoteArenaAvatar.transform.SetPositionAndRotation(remoteSpawn, Quaternion.Euler(0f, localIsPlant ? 180f : 0f, 0f));
 
-        // Hitbox: capsule matching the player's CharacterController size, kinematic rigidbody so it registers hits/triggers
-        CapsuleCollider hitbox = remoteArenaAvatar.AddComponent<CapsuleCollider>();
-        hitbox.height = 2.0f;
-        hitbox.radius = 0.5f;
-        hitbox.center = Vector3.zero;
+        // Primary body hitbox + upper head/blossom hitbox for each plant and zombie in the 3D 1v1 zone
+        CapsuleCollider bodyHitbox = remoteArenaAvatar.AddComponent<CapsuleCollider>();
+        bodyHitbox.height = 2.0f;
+        bodyHitbox.radius = (!localIsPlant && touchedType == PlantType.Durian) ? 0.78f : 0.58f;
+        bodyHitbox.center = Vector3.zero;
+
+        SphereCollider headHitbox = remoteArenaAvatar.AddComponent<SphereCollider>();
+        headHitbox.radius = (!localIsPlant && touchedType == PlantType.Durian) ? 0.72f : 0.52f;
+        headHitbox.center = new Vector3(0f, 0.35f, 0f);
+
         Rigidbody rb = remoteArenaAvatar.AddComponent<Rigidbody>();
         rb.isKinematic = true;
         rb.useGravity = false;
@@ -1113,43 +1604,67 @@ public class GridManager : MonoBehaviour
         {
             visual = CreateZombieVisual("Visual_Zombie", isGhost: false);
             currentArenaOpponentName = "ZOMBIE PLAYER";
+
+            // Strip any colliders on the visual so only the capsule/sphere hitboxes are used
+            foreach (Collider c in visual.GetComponentsInChildren<Collider>())
+            {
+                Destroy(c);
+            }
+            visual.transform.SetParent(remoteArenaAvatar.transform, false);
+            visual.transform.localPosition = new Vector3(0f, -0.1f, 0f);
+            visual.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // flat 2D art faces the avatar's forward
+            visual.transform.localScale = Vector3.one * 1.1f;
+
+            // Mirror copy on the back so the texture is visible from every side
+            GameObject back = Instantiate(visual, remoteArenaAvatar.transform, false);
+            back.name = visual.name + "_Back";
+            back.transform.localRotation = Quaternion.identity;
+            foreach (MonoBehaviour mb in back.GetComponentsInChildren<MonoBehaviour>())
+            {
+                mb.enabled = false;
+            }
         }
         else
         {
-            visual = CreatePlantVisual(touchedType, $"Visual_{touchedType}", isGhost: false);
+            visual = Create3DPlantPlaceholder(touchedType, $"Visual_3D_{touchedType}");
             currentArenaOpponentName = $"{touchedType.ToString().ToUpper()} PLAYER";
+
+            visual.transform.SetParent(remoteArenaAvatar.transform, false);
+            visual.transform.localPosition = Vector3.zero;
+            visual.transform.localRotation = Quaternion.identity;
+            visual.transform.localScale = Vector3.one;
         }
 
-        // Strip any colliders on the visual so only the capsule hitbox is used
-        foreach (Collider c in visual.GetComponentsInChildren<Collider>())
-        {
-            Destroy(c);
-        }
-        visual.transform.SetParent(remoteArenaAvatar.transform, false);
-        visual.transform.localPosition = new Vector3(0f, -0.1f, 0f);
-        visual.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // flat 2D art faces the avatar's forward
-        visual.transform.localScale = Vector3.one * 1.1f;
+        // World-space 3D HP Bar above the opponent (no text sign over their head)
+        CreateRemoteWorldHPBar(remoteArenaAvatar.transform, localIsPlant);
+    }
 
-        // Mirror copy on the back so the texture is visible from every side
-        GameObject back = Instantiate(visual, remoteArenaAvatar.transform, false);
-        back.name = visual.name + "_Back";
-        back.transform.localRotation = Quaternion.identity;
-        foreach (MonoBehaviour mb in back.GetComponentsInChildren<MonoBehaviour>())
-        {
-            mb.enabled = false;
-        }
+    private void CreateRemoteWorldHPBar(Transform parent, bool opponentIsZombie)
+    {
+        GameObject hpRoot = new GameObject("WorldHPBar");
+        hpRoot.transform.SetParent(parent, false);
+        hpRoot.transform.localPosition = new Vector3(0f, 1.38f, 0f);
+        hpRoot.AddComponent<FaceCameraBillboard>();
 
-        // Floating name tag above the opponent
-        GameObject tagObj = new GameObject("NameTag");
-        tagObj.transform.SetParent(remoteArenaAvatar.transform, false);
-        tagObj.transform.localPosition = new Vector3(0f, 1.6f, 0f);
-        TextMesh tm = tagObj.AddComponent<TextMesh>();
-        tm.text = currentArenaOpponentName;
-        tm.characterSize = 0.08f;
-        tm.fontSize = 48;
-        tm.anchor = TextAnchor.MiddleCenter;
-        tm.color = localIsPlant ? new Color(0.75f, 0.4f, 1f) : new Color(0.5f, 1f, 0.5f);
-        tagObj.AddComponent<FaceCameraBillboard>();
+        GameObject bgQuad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        bgQuad.name = "HPBar_BG";
+        bgQuad.transform.SetParent(hpRoot.transform, false);
+        bgQuad.transform.localPosition = Vector3.zero;
+        bgQuad.transform.localScale = new Vector3(1.32f, 0.18f, 1f);
+        DestroyCollider(bgQuad);
+        bgQuad.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.08f, 0.08f, 0.10f));
+
+        GameObject fillQuad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        fillQuad.name = "HPBar_Fill";
+        fillQuad.transform.SetParent(hpRoot.transform, false);
+        fillQuad.transform.localPosition = new Vector3(0f, 0f, -0.01f);
+        fillQuad.transform.localScale = new Vector3(1.24f, 0.12f, 1f);
+        DestroyCollider(fillQuad);
+
+        remoteHpBarBaseColor = opponentIsZombie ? new Color(0.82f, 0.32f, 0.98f) : new Color(0.28f, 0.92f, 0.38f);
+        remoteHpBarFillRenderer = fillQuad.GetComponent<Renderer>();
+        remoteHpBarFillRenderer.material = CreateColoredMaterial(remoteHpBarBaseColor);
+        remoteHpBarFill = fillQuad.transform;
     }
 
     private void CreateArenaBlock(string name, Vector3 localPos, Vector3 scale, Color color)
@@ -1720,6 +2235,86 @@ public class GridManager : MonoBehaviour
         return GameVisuals.CreatePlant(type, objectName, isGhost, TileWidth, TileHeight);
     }
 
+    private GameObject Create3DPlantPlaceholder(PlantType type, string objectName)
+    {
+        GameObject root = new GameObject(objectName);
+
+        if (type == PlantType.Moonflower)
+        {
+            GameObject stem = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            stem.name = "Stem";
+            stem.transform.SetParent(root.transform, false);
+            stem.transform.localPosition = new Vector3(0f, -0.45f, 0f);
+            stem.transform.localScale = new Vector3(0.36f, 0.50f, 0.36f);
+            DestroyCollider(stem);
+            stem.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.2f, 0.7f, 0.45f));
+
+            GameObject petals = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            petals.name = "Petals";
+            petals.transform.SetParent(root.transform, false);
+            petals.transform.localPosition = new Vector3(0f, 0.25f, -0.04f);
+            petals.transform.localScale = new Vector3(1.15f, 1.15f, 0.40f);
+            DestroyCollider(petals);
+            petals.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.45f, 0.85f, 1.0f));
+
+            GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            head.name = "Head";
+            head.transform.SetParent(root.transform, false);
+            head.transform.localPosition = new Vector3(0f, 0.25f, 0.08f);
+            head.transform.localScale = new Vector3(0.78f, 0.78f, 0.50f);
+            DestroyCollider(head);
+            head.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(1.0f, 0.95f, 0.4f));
+        }
+        else if (type == PlantType.Rose || type == PlantType.Roze)
+        {
+            GameObject stem = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            stem.name = "Stem";
+            stem.transform.SetParent(root.transform, false);
+            stem.transform.localPosition = new Vector3(0f, -0.45f, 0f);
+            stem.transform.localScale = new Vector3(0.38f, 0.50f, 0.38f);
+            DestroyCollider(stem);
+            stem.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.15f, 0.65f, 0.25f));
+
+            GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            head.name = "Head";
+            head.transform.SetParent(root.transform, false);
+            head.transform.localPosition = new Vector3(0f, 0.28f, 0f);
+            head.transform.localScale = new Vector3(0.95f, 0.95f, 0.95f);
+            DestroyCollider(head);
+            head.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.95f, 0.18f, 0.32f));
+
+            GameObject barrel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            barrel.name = "Barrel";
+            barrel.transform.SetParent(root.transform, false);
+            barrel.transform.localPosition = new Vector3(0f, 0.28f, 0.52f);
+            barrel.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            barrel.transform.localScale = new Vector3(0.42f, 0.30f, 0.42f);
+            DestroyCollider(barrel);
+            barrel.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.8f, 0.12f, 0.25f));
+        }
+        else
+        {
+            GameObject body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            body.name = "Body";
+            body.transform.SetParent(root.transform, false);
+            body.transform.localPosition = new Vector3(0f, -0.05f, 0f);
+            body.transform.localScale = new Vector3(1.25f, 1.40f, 1.20f);
+            DestroyCollider(body);
+            body.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.68f, 0.58f, 0.2f));
+
+            GameObject spikes1 = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            spikes1.name = "Spikes";
+            spikes1.transform.SetParent(root.transform, false);
+            spikes1.transform.localPosition = new Vector3(0f, -0.05f, 0f);
+            spikes1.transform.localRotation = Quaternion.Euler(45f, 0f, 45f);
+            spikes1.transform.localScale = new Vector3(1.05f, 1.05f, 1.05f);
+            DestroyCollider(spikes1);
+            spikes1.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.82f, 0.72f, 0.25f));
+        }
+
+        return root;
+    }
+
     private void DestroyCollider(GameObject obj)
     {
         Collider col = obj.GetComponent<Collider>();
@@ -1817,37 +2412,10 @@ public class GridManager : MonoBehaviour
             return;
         }
 
-        // If inside the 3D 1v1 Arena, show arena HUD & instructions
+        // If inside the 3D 1v1 Arena, show arena HUD, HP bars, Center Cursor, Ability Charge & Hit Indicator
         if (isIn3DArena)
         {
-            GUIStyle arenaHud = new GUIStyle(GUI.skin.box)
-            {
-                fontSize = 15,
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleCenter
-            };
-            arenaHud.normal.textColor = Color.white;
-            GUI.backgroundColor = new Color(0.1f, 0.14f, 0.22f, 0.85f);
-            GUI.Box(new Rect(20f, 20f, 480f, 58f),
-                $"3D 1v1 ARENA vs {currentArenaOpponentName} (2D World Paused)\nWASD: Move + Camera Tilt | Space: Jump | Host: N = Zombie won, M = Plant won",
-                arenaHud);
-
-            if (arenaResolving)
-            {
-                GUIStyle winStyle = new GUIStyle(GUI.skin.box)
-                {
-                    fontSize = 46,
-                    fontStyle = FontStyle.Bold,
-                    alignment = TextAnchor.MiddleCenter
-                };
-                winStyle.normal.textColor = arenaZombieWon ? new Color(0.8f, 0.45f, 1f) : new Color(0.5f, 1f, 0.45f);
-                GUI.backgroundColor = new Color(0f, 0f, 0f, 0.85f);
-                float pulse = 1f + Mathf.Sin(Time.time * 8f) * 0.04f;
-                float w = 560f * pulse, h = 130f * pulse;
-                GUI.Box(new Rect(Screen.width * 0.5f - w * 0.5f, Screen.height * 0.5f - h * 0.5f, w, h),
-                    arenaZombieWon ? "ZOMBIE WON!" : "PLANT WON!", winStyle);
-            }
-            GUI.backgroundColor = prevBg;
+            Draw3DArenaHUD(prevBg);
             return;
         }
 
@@ -1930,6 +2498,216 @@ public class GridManager : MonoBehaviour
         }
 
         GUI.backgroundColor = prevBg;
+    }
+
+    private void Draw3DArenaHUD(Color prevBg)
+    {
+        float sw = Screen.width;
+        float sh = Screen.height;
+        float cx = sw * 0.5f;
+        float cy = sh * 0.5f;
+
+        MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
+        bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
+        PlantType activePlant = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+
+        string myTitle = isZombie ? "YOU (ZOMBIE)" : $"YOU ({activePlant.ToString().ToUpper()})";
+        string oppTitle = isZombie ? $"OPPONENT ({activePlant.ToString().ToUpper()})" : "OPPONENT (ZOMBIE)";
+
+        string abilityHint;
+        if (isZombie)
+        {
+            abilityHint = "[Left Click / E] Melee Slash Attack";
+        }
+        else if (activePlant == PlantType.Moonflower)
+        {
+            abilityHint = "[Left Click / E] Moon Beam (2.0s Charge Over Head -> Laser at Cursor)";
+        }
+        else if (activePlant == PlantType.Rose || activePlant == PlantType.Roze)
+        {
+            abilityHint = "[Left Click / E] Hitscan Thorn Shot (0.4s Charge)";
+        }
+        else
+        {
+            abilityHint = "[Left Click / E] Durian Roll (Lowers FOV, Harder Turn, 2.0s Zombie Immobilize on Hit)";
+        }
+
+        // 1. Top-Center Instructions Banner
+        GUIStyle arenaHud = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 13,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        arenaHud.normal.textColor = Color.white;
+        GUI.backgroundColor = new Color(0.10f, 0.14f, 0.22f, 0.88f);
+        GUI.Box(new Rect(cx - 310f, 12f, 620f, 54f),
+            $"3D 1v1 ARENA • {abilityHint}\nWASD: Move | Space: Jump | Hits Connected: {arenaHitsLanded} | Host: N = Zombie Won, M = Plant Won",
+            arenaHud);
+
+        // 2. Top-Left & Top-Right HP Bars for Local Player and Opponent
+        Color myBarCol = isZombie ? new Color(0.78f, 0.32f, 0.96f) : new Color(0.25f, 0.90f, 0.38f);
+        Color oppBarCol = isZombie ? new Color(0.25f, 0.90f, 0.38f) : new Color(0.78f, 0.32f, 0.96f);
+        if (remoteHitFlashTimer > 0f)
+        {
+            oppBarCol = new Color(1.0f, 0.95f, 0.35f);
+        }
+
+        DrawArenaHPBar(new Rect(18f, 14f, 240f, 48f), myTitle, localArenaCurrentHP, localArenaMaxHP, myBarCol);
+        DrawArenaHPBar(new Rect(sw - 258f, 14f, 240f, 48f), oppTitle, remoteArenaCurrentHP, remoteArenaMaxHP, oppBarCol);
+
+        // 3. Center Cursor (Crosshair) in the exact middle of the screen
+        Color prevColor = GUI.color;
+        bool hitActive = arenaHitIndicatorTimer > 0f;
+        GUI.color = hitActive ? new Color(1.0f, 0.30f, 0.30f, 0.98f) : new Color(0.95f, 1.0f, 0.95f, 0.92f);
+
+        // Center dot
+        GUI.DrawTexture(new Rect(cx - 2f, cy - 2f, 4f, 4f), Texture2D.whiteTexture);
+        // 4 Crosshair ticks (left, right, top, bottom)
+        GUI.DrawTexture(new Rect(cx - 14f, cy - 1f, 8f, 2f), Texture2D.whiteTexture);
+        GUI.DrawTexture(new Rect(cx + 6f, cy - 1f, 8f, 2f), Texture2D.whiteTexture);
+        GUI.DrawTexture(new Rect(cx - 1f, cy - 14f, 2f, 8f), Texture2D.whiteTexture);
+        GUI.DrawTexture(new Rect(cx - 1f, cy + 6f, 2f, 8f), Texture2D.whiteTexture);
+
+        // 4. Hit Marker & Hit Connected Indicator around the center cursor when an attack connects
+        if (hitActive)
+        {
+            GUI.color = new Color(1.0f, 0.88f, 0.25f, 0.98f);
+            // 4 corner hit-marker brackets around center cursor
+            GUI.DrawTexture(new Rect(cx - 11f, cy - 11f, 5f, 2f), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(cx - 11f, cy - 11f, 2f, 5f), Texture2D.whiteTexture);
+
+            GUI.DrawTexture(new Rect(cx + 6f, cy - 11f, 5f, 2f), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(cx + 9f, cy - 11f, 2f, 5f), Texture2D.whiteTexture);
+
+            GUI.DrawTexture(new Rect(cx - 11f, cy + 9f, 5f, 2f), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(cx - 11f, cy + 6f, 2f, 5f), Texture2D.whiteTexture);
+
+            GUI.DrawTexture(new Rect(cx + 6f, cy + 9f, 5f, 2f), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(cx + 9f, cy + 6f, 2f, 5f), Texture2D.whiteTexture);
+
+            GUI.color = prevColor;
+            GUIStyle hitStyle = new GUIStyle(GUI.skin.box)
+            {
+                fontSize = 15,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter
+            };
+            hitStyle.normal.textColor = new Color(1.0f, 0.95f, 0.35f);
+            GUI.backgroundColor = new Color(0.35f, 0.06f, 0.06f, 0.92f);
+            GUI.Box(new Rect(cx - 190f, cy + 26f, 380f, 32f),
+                $"★ {arenaLastHitLabel} (Hits: {arenaHitsLanded}) ★", hitStyle);
+        }
+        GUI.color = prevColor;
+
+        // 5. Ability Charge / Roll Progress Bar below the Center Cursor
+        if (isChargingMoonBeam)
+        {
+            float pct = 1.0f - Mathf.Clamp01(moonBeamChargeTimer / Mathf.Max(0.01f, moonBeamChargeDuration));
+            DrawCenterChargeBar(cx, cy - 36f, pct, $"CHARGING MOON BEAM... {(pct * 100f):F0}%", new Color(0.30f, 0.95f, 1.0f));
+        }
+        else if (isChargingRoseThorn)
+        {
+            float pct = 1.0f - Mathf.Clamp01(roseThornChargeTimer / Mathf.Max(0.01f, roseThornChargeDuration));
+            DrawCenterChargeBar(cx, cy - 36f, pct, "CHARGING THORN...", new Color(1.0f, 0.25f, 0.45f));
+        }
+        else if (isDurianRollingLocal)
+        {
+            float pct = Mathf.Clamp01(durianRollTimer / Mathf.Max(0.01f, durianRollDuration));
+            DrawCenterChargeBar(cx, cy - 36f, pct, "DURIAN ROLLING! (RAM ZOMBIE TO IMMOBILIZE)", new Color(0.95f, 0.80f, 0.25f));
+        }
+
+        // 6. Immobilized Banner if Zombie Player was hit by Durian Roll
+        PlayerController pc = GetPrimaryPlayerController();
+        if (pc != null && pc.IsImmobilized)
+        {
+            GUIStyle stunStyle = new GUIStyle(GUI.skin.box)
+            {
+                fontSize = 20,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter
+            };
+            stunStyle.normal.textColor = new Color(1.0f, 0.85f, 0.25f);
+            GUI.backgroundColor = new Color(0.28f, 0.08f, 0.05f, 0.94f);
+            GUI.Box(new Rect(cx - 250f, cy - 95f, 500f, 46f),
+                $"⚡ IMMOBILIZED BY DURIAN! ({pc.immobilizedTimer:F1}s) — Movement & Attacks Locked ⚡", stunStyle);
+        }
+        else if (remoteImmobilizedTimer > 0f)
+        {
+            GUIStyle oppStunStyle = new GUIStyle(GUI.skin.box)
+            {
+                fontSize = 15,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter
+            };
+            oppStunStyle.normal.textColor = new Color(0.45f, 1.0f, 0.55f);
+            GUI.backgroundColor = new Color(0.08f, 0.24f, 0.12f, 0.90f);
+            GUI.Box(new Rect(cx - 210f, cy + 64f, 420f, 30f),
+                $"ZOMBIE IMMOBILIZED & UNABLE TO ATTACK ({remoteImmobilizedTimer:F1}s)", oppStunStyle);
+        }
+
+        // 7. Arena Resolution Banner (N / M)
+        if (arenaResolving)
+        {
+            GUIStyle winStyle = new GUIStyle(GUI.skin.box)
+            {
+                fontSize = 46,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter
+            };
+            winStyle.normal.textColor = arenaZombieWon ? new Color(0.8f, 0.45f, 1f) : new Color(0.5f, 1f, 0.45f);
+            GUI.backgroundColor = new Color(0f, 0f, 0f, 0.85f);
+            float pulse = 1f + Mathf.Sin(Time.time * 8f) * 0.04f;
+            float w = 560f * pulse, h = 130f * pulse;
+            GUI.Box(new Rect(cx - w * 0.5f, cy - h * 0.5f, w, h),
+                arenaZombieWon ? "ZOMBIE WON!" : "PLANT WON!", winStyle);
+        }
+
+        GUI.backgroundColor = prevBg;
+    }
+
+    private void DrawArenaHPBar(Rect rect, string label, int currentHP, int maxHP, Color fillColor)
+    {
+        Color prevColor = GUI.color;
+        GUI.color = new Color(0.06f, 0.08f, 0.12f, 0.94f);
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+
+        float pct = Mathf.Clamp01((float)currentHP / Mathf.Max(1, maxHP));
+        Rect fillRect = new Rect(rect.x + 4f, rect.y + 24f, (rect.width - 8f) * pct, 18f);
+        GUI.color = fillColor;
+        GUI.DrawTexture(fillRect, Texture2D.whiteTexture);
+
+        GUI.color = prevColor;
+        GUIStyle textStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 12,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        textStyle.normal.textColor = Color.white;
+        GUI.Label(new Rect(rect.x, rect.y + 3f, rect.width, 20f), $"{label}  •  HP: {currentHP} / {maxHP}", textStyle);
+    }
+
+    private void DrawCenterChargeBar(float cx, float y, float pct, string text, Color fillCol)
+    {
+        Color prevColor = GUI.color;
+        Rect bgRect = new Rect(cx - 110f, y, 220f, 20f);
+        GUI.color = new Color(0.06f, 0.08f, 0.12f, 0.92f);
+        GUI.DrawTexture(bgRect, Texture2D.whiteTexture);
+
+        Rect fillRect = new Rect(bgRect.x + 2f, bgRect.y + 2f, (bgRect.width - 4f) * Mathf.Clamp01(pct), bgRect.height - 4f);
+        GUI.color = fillCol;
+        GUI.DrawTexture(fillRect, Texture2D.whiteTexture);
+
+        GUI.color = prevColor;
+        GUIStyle st = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 11,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        st.normal.textColor = Color.white;
+        GUI.Label(bgRect, text, st);
     }
 
     private void DrawPlantSeedButton(int index, PlantType type, string title, int cost, Color readyTint)

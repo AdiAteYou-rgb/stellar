@@ -24,12 +24,22 @@ public class PlayerController : MonoBehaviour
     [Header("First-Person Camera & Strafe Tilt")]
     public bool isFirstPersonArenaActive = false;
     [HideInInspector] public bool inputFrozen = false;
+    [HideInInspector] public float immobilizedTimer = 0f;
+    [HideInInspector] public bool isDurianRolling = false;
     public string currentOpponentRoleName = "OPPONENT";
     public Camera playerCamera;
     [SerializeField] private float mouseSensitivity = 2.2f;
     [SerializeField] private float eyeHeight = 0.72f;
     [SerializeField] private float strafeTiltAngle = 4.5f;
     [SerializeField] private float strafeTiltSpeed = 10.0f;
+
+    [Header("Durian Roll Camera & Turn Settings")]
+    [SerializeField] private float normalFov = 75f;
+    [SerializeField] private float durianRollFov = 58f;
+    [SerializeField] private float durianRollTurnMultiplier = 0.38f;
+    [SerializeField] private float durianRollSpeedMultiplier = 1.65f;
+
+    public bool IsImmobilized => immobilizedTimer > 0f;
 
     private float cameraPitch = 0f;
     private float currentRollTilt = 0f;
@@ -70,6 +80,8 @@ public class PlayerController : MonoBehaviour
         landingSlowTimer = 0f;
         cameraPitch = 0f;
         currentRollTilt = 0f;
+        immobilizedTimer = 0f;
+        isDurianRolling = false;
 
         // Hide player's own capsule mesh in first-person so it doesn't block camera view
         MeshRenderer mr = GetComponent<MeshRenderer>();
@@ -81,7 +93,7 @@ public class PlayerController : MonoBehaviour
         if (playerCamera != null)
         {
             playerCamera.orthographic = false;
-            playerCamera.fieldOfView = 75f;
+            playerCamera.fieldOfView = normalFov;
             playerCamera.rect = new Rect(0f, 0f, 1f, 1f);
         }
 
@@ -92,6 +104,8 @@ public class PlayerController : MonoBehaviour
     public void ExitFirstPersonArena()
     {
         isFirstPersonArenaActive = false;
+        isDurianRolling = false;
+        immobilizedTimer = 0f;
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
 
@@ -101,6 +115,12 @@ public class PlayerController : MonoBehaviour
             mr.enabled = false;
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
         }
+    }
+
+    public void Immobilize(float duration)
+    {
+        immobilizedTimer = Mathf.Max(immobilizedTimer, duration);
+        isDurianRolling = false;
     }
 
     private void Update()
@@ -116,6 +136,11 @@ public class PlayerController : MonoBehaviour
         if (inputFrozen)
         {
             return;
+        }
+
+        if (immobilizedTimer > 0f)
+        {
+            immobilizedTimer = Mathf.Max(0f, immobilizedTimer - Time.deltaTime);
         }
 
         // Toggle cursor lock with Escape in Arena mode
@@ -164,11 +189,12 @@ public class PlayerController : MonoBehaviour
         }
         landingCameraDip = Mathf.Lerp(landingCameraDip, 0f, Time.deltaTime * 10.0f);
 
-        // First-Person Mouse Look
+        // First-Person Mouse Look (harder to turn while Durian is rolling)
         if (isFirstPersonArenaActive && Cursor.lockState == CursorLockMode.Locked)
         {
-            float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity;
-            float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity;
+            float turnMul = isDurianRolling ? durianRollTurnMultiplier : 1.0f;
+            float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity * turnMul;
+            float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity * (isDurianRolling ? 0.65f : 1.0f);
 
             transform.Rotate(Vector3.up * mouseX);
             cameraPitch = Mathf.Clamp(cameraPitch - mouseY, -80f, 80f);
@@ -179,7 +205,20 @@ public class PlayerController : MonoBehaviour
         float moveZ = Input.GetAxisRaw("Vertical");
 
         Vector3 moveDir;
-        if (isFirstPersonArenaActive)
+        if (IsImmobilized)
+        {
+            // Immobilized by Durian roll connection: cannot move!
+            moveDir = Vector3.zero;
+            moveX = 0f;
+            moveZ = 0f;
+        }
+        else if (isDurianRolling)
+        {
+            // While rolling, propel forward with reduced lateral steering
+            float steerX = moveX * 0.35f;
+            moveDir = (transform.forward + transform.right * steerX).normalized;
+        }
+        else if (isFirstPersonArenaActive)
         {
             moveDir = (transform.right * moveX + transform.forward * moveZ).normalized;
         }
@@ -188,21 +227,25 @@ public class PlayerController : MonoBehaviour
             moveDir = new Vector3(moveX, 0f, moveZ).normalized;
         }
 
-        // Handle Sprinting (Shift key)
+        // Handle Sprinting (Shift key) or Durian Roll speed boost
         float currentSpeed = playerSpeed;
-        if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
+        if (isDurianRolling)
+        {
+            currentSpeed *= durianRollSpeedMultiplier;
+        }
+        else if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
         {
             currentSpeed *= sprintMultiplier;
         }
 
         // Apply 0.5-second Landing Slowdown so player feels the landing impact
-        if (landingSlowTimer > 0f)
+        if (landingSlowTimer > 0f && !isDurianRolling)
         {
             currentSpeed *= landingSpeedMultiplier;
         }
 
-        // Handle Jumping (Spacebar)
-        if ((Input.GetKeyDown(KeyCode.Space) || Input.GetButtonDown("Jump")) && groundedPlayer)
+        // Handle Jumping (Spacebar) - disabled while immobilized or rolling
+        if (!IsImmobilized && !isDurianRolling && (Input.GetKeyDown(KeyCode.Space) || Input.GetButtonDown("Jump")) && groundedPlayer)
         {
             playerVelocity.y = Mathf.Sqrt(jumpHeight * -2.0f * gravityValue);
         }
@@ -214,14 +257,18 @@ public class PlayerController : MonoBehaviour
         Vector3 finalMove = (moveDir * currentSpeed) + new Vector3(0f, playerVelocity.y, 0f);
         controller.Move(finalMove * Time.deltaTime);
 
-        // Update First-Person Camera Position & Left/Right Movement Tilt
+        // Update First-Person Camera Position, FOV (lowered while Durian rolling), & Left/Right Movement Tilt
         if (isFirstPersonArenaActive && playerCamera != null)
         {
+            float targetFov = isDurianRolling ? durianRollFov : normalFov;
+            playerCamera.fieldOfView = Mathf.Lerp(playerCamera.fieldOfView, targetFov, Time.deltaTime * 10.0f);
+
             // Slightly tilt the camera left and right based on horizontal movement (moveX)
             float targetTiltZ = -moveX * strafeTiltAngle;
             currentRollTilt = Mathf.Lerp(currentRollTilt, targetTiltZ, Time.deltaTime * strafeTiltSpeed);
 
-            playerCamera.transform.position = transform.position + new Vector3(0f, eyeHeight + landingCameraDip, 0f);
+            float rollDip = isDurianRolling ? -0.25f : 0f;
+            playerCamera.transform.position = transform.position + new Vector3(0f, eyeHeight + landingCameraDip + rollDip, 0f);
             playerCamera.transform.rotation = Quaternion.Euler(cameraPitch, transform.eulerAngles.y, currentRollTilt);
         }
     }
