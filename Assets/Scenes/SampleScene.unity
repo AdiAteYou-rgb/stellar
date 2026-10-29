@@ -6158,6 +6158,7 @@ MonoBehaviour:
   joinerRole: 0
   localRole: 0
   showHowToPlayModal: 0
+  menuFont: {fileID: 12800000, guid: 6c268a430064e614cb2f8fbdb7421cd3, type: 3}
 --- !u!1 &1279167704
 GameObject:
   m_ObjectHideFlags: 0

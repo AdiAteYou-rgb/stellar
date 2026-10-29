@@ -66,6 +66,7 @@ public class MultiplayerMenuManager : MonoBehaviour
 
     [Header("Menu Polish & UI")]
     public bool showHowToPlayModal = false;
+    [SerializeField] private Font menuFont;
     private float codeCopiedTimer = 0f;
 
     private void Awake()
@@ -994,6 +995,12 @@ public class MultiplayerMenuManager : MonoBehaviour
             return;
         }
 
+        Font font = menuFont != null ? menuFont : FindSophiecomicFont();
+        if (font != null)
+        {
+            GUI.skin.font = font;
+        }
+
         float sw = Screen.width;
         float sh = Screen.height;
         float centerX = sw * 0.5f;
@@ -1053,7 +1060,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             {
                 richText = true,
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 24,
+                fontSize = 28,
                 fontStyle = FontStyle.Bold
             };
             Rect titleTopRect = new Rect(titleRect.x, titleRect.y + 7f, titleRect.width, 36f);
@@ -1065,7 +1072,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             {
                 richText = true,
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 13,
+                fontSize = 15,
                 fontStyle = FontStyle.Bold
             };
             Rect titleBotRect = new Rect(titleRect.x, titleRect.y + 44f, titleRect.width, 24f);
@@ -1077,7 +1084,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             GUIStyle advBtnStyle = new GUIStyle(GUI.skin.label)
             {
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 20,
+                fontSize = 23,
                 fontStyle = FontStyle.Bold,
                 padding = new RectOffset(44, 0, 0, 0)
             };
@@ -1093,7 +1100,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             GUIStyle ctrlBtnStyle = new GUIStyle(GUI.skin.label)
             {
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 16,
+                fontSize = 19,
                 fontStyle = FontStyle.Bold,
                 padding = new RectOffset(44, 0, 0, 0)
             };
@@ -1108,7 +1115,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             GUIStyle quitBtnStyle = new GUIStyle(GUI.skin.label)
             {
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 15,
+                fontSize = 18,
                 fontStyle = FontStyle.Bold,
                 padding = new RectOffset(44, 0, 0, 0)
             };
@@ -1123,7 +1130,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             GUIStyle footerStyle = new GUIStyle(GUI.skin.label)
             {
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 11
+                fontSize = 12
             };
             footerStyle.normal.textColor = new Color(0.45f, 0.55f, 0.70f);
             GUI.Label(new Rect(centerX - 250f, centerY + 160f, 500f, 24f), "v1.2.0 • 16:9 Orthographic • Netcode Ready", footerStyle);
@@ -1342,6 +1349,20 @@ public class MultiplayerMenuManager : MonoBehaviour
             }
             GUI.backgroundColor = Color.white;
         }
+    }
+
+    private static Font FindSophiecomicFont()
+    {
+        Font[] fonts = Resources.FindObjectsOfTypeAll<Font>();
+        foreach (Font font in fonts)
+        {
+            if (font != null && font.name.Contains("Sophiecomic"))
+            {
+                return font;
+            }
+        }
+
+        return null;
     }
 
     private void DrawHowToPlayModal(float sw, float sh, float centerX, float centerY)
