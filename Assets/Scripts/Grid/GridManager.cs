@@ -208,6 +208,8 @@ public class GridManager : MonoBehaviour
     private void Awake()
     {
         Application.runInBackground = true;
+        Application.targetFrameRate = 60;
+        QualitySettings.vSyncCount = 1;
         SyncWallScale();
         if (Application.isPlaying)
         {
@@ -231,8 +233,15 @@ public class GridManager : MonoBehaviour
 
     public void SyncWallScale()
     {
-        transform.rotation = Quaternion.identity;
-        transform.localScale = new Vector3(wallWidth, wallHeight, wallThickness);
+        Vector3 targetScale = new Vector3(wallWidth, wallHeight, wallThickness);
+        if (transform.localScale != targetScale)
+        {
+            transform.localScale = targetScale;
+        }
+        if (transform.rotation != Quaternion.identity)
+        {
+            transform.rotation = Quaternion.identity;
+        }
 
         if (targetCamera == null)
         {
@@ -241,8 +250,11 @@ public class GridManager : MonoBehaviour
 
         if (targetCamera != null && enforce16By9Viewport && !isIn3DArena && !isZoomingIntoClash)
         {
-            targetCamera.orthographic = true;
-            targetCamera.orthographicSize = wallHeight * 0.5f;
+            if (!targetCamera.orthographic || Mathf.Abs(targetCamera.orthographicSize - wallHeight * 0.5f) > 0.001f)
+            {
+                targetCamera.orthographic = true;
+                targetCamera.orthographicSize = wallHeight * 0.5f;
+            }
             Apply16By9Viewport(targetCamera);
         }
     }
@@ -254,10 +266,21 @@ public class GridManager : MonoBehaviour
 
         if (targetCamera != null && !isIn3DArena && !isZoomingIntoClash)
         {
-            targetCamera.orthographic = true;
-            targetCamera.orthographicSize = wallHeight * 0.5f;
-            targetCamera.transform.position = GetIdealCameraPosition();
-            targetCamera.transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up);
+            if (!targetCamera.orthographic || Mathf.Abs(targetCamera.orthographicSize - wallHeight * 0.5f) > 0.001f)
+            {
+                targetCamera.orthographic = true;
+                targetCamera.orthographicSize = wallHeight * 0.5f;
+            }
+            Vector3 idealPos = GetIdealCameraPosition();
+            if (Vector3.Distance(targetCamera.transform.position, idealPos) > 0.001f)
+            {
+                targetCamera.transform.position = idealPos;
+            }
+            Quaternion idealRot = Quaternion.LookRotation(transform.forward, Vector3.up);
+            if (targetCamera.transform.rotation != idealRot)
+            {
+                targetCamera.transform.rotation = idealRot;
+            }
 
             if (enforce16By9Viewport)
             {
@@ -273,32 +296,29 @@ public class GridManager : MonoBehaviour
 
     public void Apply16By9Viewport(Camera cam)
     {
+        if (cam == null) return;
         float targetAspect = 16.0f / 9.0f;
         float windowAspect = (float)Screen.width / Mathf.Max(1, Screen.height);
         float scaleHeight = windowAspect / targetAspect;
 
+        Rect targetRect;
         if (Mathf.Abs(scaleHeight - 1.0f) < 0.01f)
         {
-            cam.rect = new Rect(0f, 0f, 1f, 1f);
+            targetRect = new Rect(0f, 0f, 1f, 1f);
         }
         else if (scaleHeight < 1.0f)
         {
-            Rect rect = cam.rect;
-            rect.width = 1.0f;
-            rect.height = scaleHeight;
-            rect.x = 0f;
-            rect.y = (1.0f - scaleHeight) * 0.5f;
-            cam.rect = rect;
+            targetRect = new Rect(0f, (1.0f - scaleHeight) * 0.5f, 1.0f, scaleHeight);
         }
         else
         {
             float scaleWidth = 1.0f / scaleHeight;
-            Rect rect = cam.rect;
-            rect.width = scaleWidth;
-            rect.height = 1.0f;
-            rect.x = (1.0f - scaleWidth) * 0.5f;
-            rect.y = 0f;
-            cam.rect = rect;
+            targetRect = new Rect((1.0f - scaleWidth) * 0.5f, 0f, scaleWidth, 1.0f);
+        }
+
+        if (cam.rect != targetRect)
+        {
+            cam.rect = targetRect;
         }
     }
 
@@ -361,7 +381,7 @@ public class GridManager : MonoBehaviour
         );
         defenseLineObj.transform.localScale = new Vector3(0.16f, wallHeight, 1.0f);
         DestroyCollider(defenseLineObj);
-        defenseLineObj.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(1.0f, 0.20f, 0.25f, 0.98f));
+        defenseLineObj.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(1.0f, 0.20f, 0.25f, 0.98f));
 
         // Wooden Garden Border Frame
         Transform existingBorder = transform.Find("GardenFrame");
@@ -390,7 +410,7 @@ public class GridManager : MonoBehaviour
         beam.transform.localPosition = localPos;
         beam.transform.localScale = localScale;
         DestroyCollider(beam);
-        beam.GetComponent<Renderer>().material = CreateColoredMaterial(color);
+        beam.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(color);
     }
 
     private void CreatePreviewGhosts()
@@ -1097,7 +1117,7 @@ public class GridManager : MonoBehaviour
                 localMoonChargeOrb.name = "MoonBeamChargeOrb";
                 localMoonChargeOrb.transform.SetParent(arena3DRoot.transform, true);
                 DestroyCollider(localMoonChargeOrb);
-                localMoonChargeOrb.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.45f, 0.95f, 1.0f));
+                localMoonChargeOrb.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.45f, 0.95f, 1.0f));
             }
 
             if (localMoonChargeOrb != null && targetCamera != null)
@@ -1397,7 +1417,7 @@ public class GridManager : MonoBehaviour
         beam.transform.up = diff.normalized;
         beam.transform.localScale = new Vector3(thickness, len * 0.5f, thickness);
         DestroyCollider(beam);
-        beam.GetComponent<Renderer>().material = CreateColoredMaterial(color);
+        beam.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(color);
         Destroy(beam, duration);
     }
 
@@ -1416,7 +1436,7 @@ public class GridManager : MonoBehaviour
             claw.transform.localRotation = Quaternion.Euler(0f, 0f, -35f);
             claw.transform.localScale = new Vector3(0.08f, 0.95f, 0.08f);
             DestroyCollider(claw);
-            claw.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.85f, 0.35f, 1.0f));
+            claw.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.85f, 0.35f, 1.0f));
         }
 
         Destroy(slashRoot, 0.20f);
@@ -1670,7 +1690,7 @@ public class GridManager : MonoBehaviour
         floor.transform.localPosition = new Vector3(0f, -0.25f, 0f);
         floor.transform.localScale = new Vector3(44f, 0.5f, 44f);
         arenaFloorRenderer = floor.GetComponent<Renderer>();
-        arenaFloorRenderer.material = CreateColoredMaterial(new Color(0.22f, 0.28f, 0.24f));
+        arenaFloorRenderer.sharedMaterial = CreateColoredMaterial(new Color(0.22f, 0.28f, 0.24f));
 
         // 4 Outer Perimeter Arena Walls
         CreateArenaBlock("Wall_North", new Vector3(0f, 1.75f, 22f), new Vector3(44f, 3.5f, 0.8f), new Color(0.32f, 0.36f, 0.42f));
@@ -1779,7 +1799,7 @@ public class GridManager : MonoBehaviour
         };
         if (arenaFloorRenderer != null)
         {
-            arenaFloorRenderer.material = CreateColoredMaterial(floorTints[rng.Next(0, floorTints.Length)]);
+            arenaFloorRenderer.sharedMaterial = CreateColoredMaterial(floorTints[rng.Next(0, floorTints.Length)]);
         }
 
         Color pillarColor = new Color(
@@ -2075,7 +2095,7 @@ public class GridManager : MonoBehaviour
         block.transform.localPosition = localPos;
         block.transform.localRotation = Quaternion.Euler(0f, yawDegrees, 0f);
         block.transform.localScale = scale;
-        block.GetComponent<Renderer>().material = CreateColoredMaterial(color);
+        block.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(color);
     }
 
     private void CreateRemoteWorldHPBar(Transform parent, bool opponentIsZombie)
@@ -2091,7 +2111,7 @@ public class GridManager : MonoBehaviour
         bgQuad.transform.localPosition = Vector3.zero;
         bgQuad.transform.localScale = new Vector3(1.32f, 0.18f, 1f);
         DestroyCollider(bgQuad);
-        bgQuad.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.08f, 0.08f, 0.10f));
+        bgQuad.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.08f, 0.08f, 0.10f));
 
         GameObject fillQuad = GameObject.CreatePrimitive(PrimitiveType.Quad);
         fillQuad.name = "HPBar_Fill";
@@ -2102,7 +2122,7 @@ public class GridManager : MonoBehaviour
 
         remoteHpBarBaseColor = opponentIsZombie ? new Color(0.82f, 0.32f, 0.98f) : new Color(0.28f, 0.92f, 0.38f);
         remoteHpBarFillRenderer = fillQuad.GetComponent<Renderer>();
-        remoteHpBarFillRenderer.material = CreateColoredMaterial(remoteHpBarBaseColor);
+        remoteHpBarFillRenderer.sharedMaterial = CreateColoredMaterial(remoteHpBarBaseColor);
         remoteHpBarFill = fillQuad.transform;
     }
 
@@ -2113,7 +2133,7 @@ public class GridManager : MonoBehaviour
         block.transform.SetParent(arena3DRoot.transform, false);
         block.transform.localPosition = localPos;
         block.transform.localScale = scale;
-        block.GetComponent<Renderer>().material = CreateColoredMaterial(color);
+        block.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(color);
     }
 
     // ==================== PLANT & ZOMBIE SELECTION / PLACEMENT ====================
@@ -2830,7 +2850,7 @@ public class GridManager : MonoBehaviour
             stem.transform.localPosition = new Vector3(0f, -0.45f, 0f);
             stem.transform.localScale = new Vector3(0.36f, 0.50f, 0.36f);
             DestroyCollider(stem);
-            stem.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.2f, 0.7f, 0.45f));
+            stem.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.2f, 0.7f, 0.45f));
 
             GameObject petals = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             petals.name = "Petals";
@@ -2838,7 +2858,7 @@ public class GridManager : MonoBehaviour
             petals.transform.localPosition = new Vector3(0f, 0.25f, -0.04f);
             petals.transform.localScale = new Vector3(1.15f, 1.15f, 0.40f);
             DestroyCollider(petals);
-            petals.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.45f, 0.85f, 1.0f));
+            petals.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.45f, 0.85f, 1.0f));
 
             GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             head.name = "Head";
@@ -2846,7 +2866,7 @@ public class GridManager : MonoBehaviour
             head.transform.localPosition = new Vector3(0f, 0.25f, 0.08f);
             head.transform.localScale = new Vector3(0.78f, 0.78f, 0.50f);
             DestroyCollider(head);
-            head.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(1.0f, 0.95f, 0.4f));
+            head.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(1.0f, 0.95f, 0.4f));
         }
         else if (type == PlantType.Rose || type == PlantType.Roze)
         {
@@ -2856,7 +2876,7 @@ public class GridManager : MonoBehaviour
             stem.transform.localPosition = new Vector3(0f, -0.45f, 0f);
             stem.transform.localScale = new Vector3(0.38f, 0.50f, 0.38f);
             DestroyCollider(stem);
-            stem.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.15f, 0.65f, 0.25f));
+            stem.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.15f, 0.65f, 0.25f));
 
             GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             head.name = "Head";
@@ -2864,7 +2884,7 @@ public class GridManager : MonoBehaviour
             head.transform.localPosition = new Vector3(0f, 0.28f, 0f);
             head.transform.localScale = new Vector3(0.95f, 0.95f, 0.95f);
             DestroyCollider(head);
-            head.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.95f, 0.18f, 0.32f));
+            head.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.95f, 0.18f, 0.32f));
 
             GameObject barrel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             barrel.name = "Barrel";
@@ -2873,7 +2893,7 @@ public class GridManager : MonoBehaviour
             barrel.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
             barrel.transform.localScale = new Vector3(0.42f, 0.30f, 0.42f);
             DestroyCollider(barrel);
-            barrel.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.8f, 0.12f, 0.25f));
+            barrel.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.8f, 0.12f, 0.25f));
         }
         else
         {
@@ -2883,7 +2903,7 @@ public class GridManager : MonoBehaviour
             body.transform.localPosition = new Vector3(0f, -0.05f, 0f);
             body.transform.localScale = new Vector3(1.25f, 1.40f, 1.20f);
             DestroyCollider(body);
-            body.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.68f, 0.58f, 0.2f));
+            body.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.68f, 0.58f, 0.2f));
 
             GameObject spikes1 = GameObject.CreatePrimitive(PrimitiveType.Cube);
             spikes1.name = "Spikes";
@@ -2892,7 +2912,7 @@ public class GridManager : MonoBehaviour
             spikes1.transform.localRotation = Quaternion.Euler(45f, 0f, 45f);
             spikes1.transform.localScale = new Vector3(1.05f, 1.05f, 1.05f);
             DestroyCollider(spikes1);
-            spikes1.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.82f, 0.72f, 0.25f));
+            spikes1.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.82f, 0.72f, 0.25f));
         }
 
         return root;
@@ -2976,28 +2996,155 @@ public class GridManager : MonoBehaviour
         return mat;
     }
 
+    private static GUIStyle s_ClashStyle;
+    private static GUIStyle s_TimerStyle;
+    private static GUIStyle s_BankStyle;
+    private static GUIStyle s_ArenaHudStyle;
+    private static GUIStyle s_HitStyle;
+    private static GUIStyle s_StunStyle;
+    private static GUIStyle s_OppStunStyle;
+    private static GUIStyle s_WinStyle;
+    private static GUIStyle s_HpTextStyle;
+    private static GUIStyle s_ChargeBarTextStyle;
+    private static GUIStyle s_PlantBtnStyle;
+    private static GUIStyle s_ZombieBtnStyle;
+    private static GUIStyle s_GameOverTitleStyle;
+    private static GUIStyle s_GameOverDescStyle;
+    private static GUIStyle s_GameOverBtnStyle;
+
+    private static void EnsureArenaGuiStyles()
+    {
+        if (s_ClashStyle != null) return;
+
+        s_ClashStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 26,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        s_ClashStyle.normal.textColor = new Color(1f, 0.9f, 0.3f);
+
+        s_TimerStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 15,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+
+        s_BankStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 17,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+
+        s_ArenaHudStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 13,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        s_ArenaHudStyle.normal.textColor = Color.white;
+
+        s_HitStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 15,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        s_HitStyle.normal.textColor = new Color(1.0f, 0.95f, 0.35f);
+
+        s_StunStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 20,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        s_StunStyle.normal.textColor = new Color(1.0f, 0.85f, 0.25f);
+
+        s_OppStunStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 15,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        s_OppStunStyle.normal.textColor = new Color(0.45f, 1.0f, 0.55f);
+
+        s_WinStyle = new GUIStyle(GUI.skin.box)
+        {
+            fontSize = 46,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+
+        s_HpTextStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 12,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        s_HpTextStyle.normal.textColor = Color.white;
+
+        s_ChargeBarTextStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 11,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        s_ChargeBarTextStyle.normal.textColor = Color.white;
+
+        s_PlantBtnStyle = new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 12,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+
+        s_ZombieBtnStyle = new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 12,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+
+        s_GameOverTitleStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 30,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+
+        s_GameOverDescStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 15,
+            alignment = TextAnchor.MiddleCenter,
+            wordWrap = true
+        };
+
+        s_GameOverBtnStyle = new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 16,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+    }
+
     private void OnGUI()
     {
         if (!Application.isPlaying || !gameplayActive)
         {
             return;
         }
+        EnsureArenaGuiStyles();
 
         Color prevBg = GUI.backgroundColor;
 
         // If zooming into clash, show clash alert banner
         if (isZoomingIntoClash)
         {
-            GUIStyle clashStyle = new GUIStyle(GUI.skin.box)
-            {
-                fontSize = 26,
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleCenter
-            };
-            clashStyle.normal.textColor = new Color(1f, 0.9f, 0.3f);
             GUI.backgroundColor = new Color(0.15f, 0.05f, 0.05f, 0.92f);
             GUI.Box(new Rect(Screen.width * 0.5f - 260f, Screen.height * 0.5f - 45f, 520f, 90f),
-                "ZOMBIE TOUCHED PLANT!\n2D World Paused - Entering 3D 1v1 Arena...", clashStyle);
+                "ZOMBIE TOUCHED PLANT!\n2D World Paused - Entering 3D 1v1 Arena...", s_ClashStyle);
             GUI.backgroundColor = prevBg;
             return;
         }
@@ -3028,45 +3175,31 @@ public class GridManager : MonoBehaviour
         int secs = Mathf.FloorToInt(matchTimeRemaining % 60f);
         string timeStr = $"{mins:D2}:{secs:D2}";
 
-        GUIStyle timerStyle = new GUIStyle(GUI.skin.box)
-        {
-            fontSize = 15,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
-
         if (matchTimeRemaining <= 30f)
         {
-            timerStyle.normal.textColor = new Color(1.0f, 0.35f, 0.35f);
+            s_TimerStyle.normal.textColor = new Color(1.0f, 0.35f, 0.35f);
             GUI.backgroundColor = new Color(0.35f, 0.08f, 0.08f, 0.95f);
         }
         else if (matchTimeRemaining <= 60f)
         {
-            timerStyle.normal.textColor = new Color(1.0f, 0.95f, 0.35f);
+            s_TimerStyle.normal.textColor = new Color(1.0f, 0.95f, 0.35f);
             GUI.backgroundColor = new Color(0.28f, 0.22f, 0.08f, 0.95f);
         }
         else
         {
-            timerStyle.normal.textColor = new Color(0.9f, 0.95f, 1.0f);
+            s_TimerStyle.normal.textColor = new Color(0.9f, 0.95f, 1.0f);
             GUI.backgroundColor = new Color(0.10f, 0.16f, 0.24f, 0.92f);
         }
 
-        GUI.Box(timerRect, $"DEFENSE TIMER\n{timeStr}\nPlants Win at 00:00", timerStyle);
+        GUI.Box(timerRect, $"DEFENSE TIMER\n{timeStr}\nPlants Win at 00:00", s_TimerStyle);
         GUI.backgroundColor = prevBg;
-
-        GUIStyle bankStyle = new GUIStyle(GUI.skin.box)
-        {
-            fontSize = 17,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
 
         // 1. MOON BANK DISPLAY + 3 PLANT SEED BUTTONS (Only shown for Plant Player or None)
         if (canPlacePlants)
         {
-            bankStyle.normal.textColor = new Color(1.0f, 0.95f, 0.4f);
+            s_BankStyle.normal.textColor = new Color(1.0f, 0.95f, 0.4f);
             GUI.backgroundColor = new Color(0.12f, 0.18f, 0.32f, 0.95f);
-            GUI.Box(moonBankRect, $"MOONS\n{currentMoons}", bankStyle);
+            GUI.Box(moonBankRect, $"MOONS\n{currentMoons}", s_BankStyle);
 
             DrawPlantSeedButton(0, PlantType.Moonflower, "Moonflower [1]", moonflowerCost, new Color(0.4f, 0.85f, 1.0f));
             DrawPlantSeedButton(1, PlantType.Rose, "Rose [2]", roseCost, new Color(1.0f, 0.4f, 0.5f));
@@ -3080,9 +3213,9 @@ public class GridManager : MonoBehaviour
             Rect actualBrainRect = canPlacePlants ? brainBankRect : new Rect(12f, 12f, 110f, 66f);
             Rect actualZombieRect = canPlacePlants ? zombieButtonRect : new Rect(126f, 12f, 145f, 66f);
 
-            bankStyle.normal.textColor = new Color(0.95f, 0.55f, 1.0f);
+            s_BankStyle.normal.textColor = new Color(0.95f, 0.55f, 1.0f);
             GUI.backgroundColor = new Color(0.24f, 0.10f, 0.28f, 0.95f);
-            GUI.Box(actualBrainRect, $"BRAINS\n{currentBrains}", bankStyle);
+            GUI.Box(actualBrainRect, $"BRAINS\n{currentBrains}", s_BankStyle);
 
             DrawZombieSpawnButton(actualZombieRect);
         }
@@ -3123,17 +3256,10 @@ public class GridManager : MonoBehaviour
         }
 
         // 1. Top-Center Instructions Banner
-        GUIStyle arenaHud = new GUIStyle(GUI.skin.box)
-        {
-            fontSize = 13,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
-        arenaHud.normal.textColor = Color.white;
         GUI.backgroundColor = new Color(0.10f, 0.14f, 0.22f, 0.88f);
         GUI.Box(new Rect(cx - 325f, 12f, 650f, 54f),
             $"3D 1v1 ARENA ({currentArenaPresetName}) • {abilityHint}\nWASD: Move | Space: Jump | R: Reroll Layout | Hits: {arenaHitsLanded} | Host: N/M = Win",
-            arenaHud);
+            s_ArenaHudStyle);
 
         // 2. Top-Left & Top-Right HP Bars for Local Player and Opponent
         Color myBarCol = isZombie ? new Color(0.78f, 0.32f, 0.96f) : new Color(0.25f, 0.90f, 0.38f);
@@ -3177,16 +3303,9 @@ public class GridManager : MonoBehaviour
             GUI.DrawTexture(new Rect(cx + 9f, cy + 6f, 2f, 5f), Texture2D.whiteTexture);
 
             GUI.color = prevColor;
-            GUIStyle hitStyle = new GUIStyle(GUI.skin.box)
-            {
-                fontSize = 15,
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleCenter
-            };
-            hitStyle.normal.textColor = new Color(1.0f, 0.95f, 0.35f);
             GUI.backgroundColor = new Color(0.35f, 0.06f, 0.06f, 0.92f);
             GUI.Box(new Rect(cx - 190f, cy + 26f, 380f, 32f),
-                $"★ {arenaLastHitLabel} (Hits: {arenaHitsLanded}) ★", hitStyle);
+                $"★ {arenaLastHitLabel} (Hits: {arenaHitsLanded}) ★", s_HitStyle);
         }
         GUI.color = prevColor;
 
@@ -3211,46 +3330,26 @@ public class GridManager : MonoBehaviour
         PlayerController pc = GetPrimaryPlayerController();
         if (pc != null && pc.IsImmobilized)
         {
-            GUIStyle stunStyle = new GUIStyle(GUI.skin.box)
-            {
-                fontSize = 20,
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleCenter
-            };
-            stunStyle.normal.textColor = new Color(1.0f, 0.85f, 0.25f);
             GUI.backgroundColor = new Color(0.28f, 0.08f, 0.05f, 0.94f);
             GUI.Box(new Rect(cx - 250f, cy - 95f, 500f, 46f),
-                $"⚡ IMMOBILIZED BY DURIAN! ({pc.immobilizedTimer:F1}s) — Movement & Attacks Locked ⚡", stunStyle);
+                $"⚡ IMMOBILIZED BY DURIAN! ({pc.immobilizedTimer:F1}s) — Movement & Attacks Locked ⚡", s_StunStyle);
         }
         else if (remoteImmobilizedTimer > 0f)
         {
-            GUIStyle oppStunStyle = new GUIStyle(GUI.skin.box)
-            {
-                fontSize = 15,
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleCenter
-            };
-            oppStunStyle.normal.textColor = new Color(0.45f, 1.0f, 0.55f);
             GUI.backgroundColor = new Color(0.08f, 0.24f, 0.12f, 0.90f);
             GUI.Box(new Rect(cx - 210f, cy + 64f, 420f, 30f),
-                $"ZOMBIE IMMOBILIZED & UNABLE TO ATTACK ({remoteImmobilizedTimer:F1}s)", oppStunStyle);
+                $"ZOMBIE IMMOBILIZED & UNABLE TO ATTACK ({remoteImmobilizedTimer:F1}s)", s_OppStunStyle);
         }
 
         // 7. Arena Resolution Banner (N / M)
         if (arenaResolving)
         {
-            GUIStyle winStyle = new GUIStyle(GUI.skin.box)
-            {
-                fontSize = 46,
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleCenter
-            };
-            winStyle.normal.textColor = arenaZombieWon ? new Color(0.8f, 0.45f, 1f) : new Color(0.5f, 1f, 0.45f);
+            s_WinStyle.normal.textColor = arenaZombieWon ? new Color(0.8f, 0.45f, 1f) : new Color(0.5f, 1f, 0.45f);
             GUI.backgroundColor = new Color(0f, 0f, 0f, 0.85f);
             float pulse = 1f + Mathf.Sin(Time.time * 8f) * 0.04f;
             float w = 560f * pulse, h = 130f * pulse;
             GUI.Box(new Rect(cx - w * 0.5f, cy - h * 0.5f, w, h),
-                arenaZombieWon ? "ZOMBIE WON!" : "PLANT WON!", winStyle);
+                arenaZombieWon ? "ZOMBIE WON!" : "PLANT WON!", s_WinStyle);
         }
 
         GUI.backgroundColor = prevBg;
@@ -3268,14 +3367,7 @@ public class GridManager : MonoBehaviour
         GUI.DrawTexture(fillRect, Texture2D.whiteTexture);
 
         GUI.color = prevColor;
-        GUIStyle textStyle = new GUIStyle(GUI.skin.label)
-        {
-            fontSize = 12,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
-        textStyle.normal.textColor = Color.white;
-        GUI.Label(new Rect(rect.x, rect.y + 3f, rect.width, 20f), $"{label}  •  HP: {currentHP} / {maxHP}", textStyle);
+        GUI.Label(new Rect(rect.x, rect.y + 3f, rect.width, 20f), $"{label}  •  HP: {currentHP} / {maxHP}", s_HpTextStyle);
     }
 
     private void DrawCenterChargeBar(float cx, float y, float pct, string text, Color fillCol)
@@ -3290,14 +3382,7 @@ public class GridManager : MonoBehaviour
         GUI.DrawTexture(fillRect, Texture2D.whiteTexture);
 
         GUI.color = prevColor;
-        GUIStyle st = new GUIStyle(GUI.skin.label)
-        {
-            fontSize = 11,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
-        st.normal.textColor = Color.white;
-        GUI.Label(bgRect, text, st);
+        GUI.Label(bgRect, text, s_ChargeBarTextStyle);
     }
 
     private void DrawPlantSeedButton(int index, PlantType type, string title, int cost, Color readyTint)
@@ -3308,12 +3393,7 @@ public class GridManager : MonoBehaviour
         bool isReady = cd <= 0.001f && enoughMoons;
         bool isSelected = isPlantSelected && selectedPlantType == type;
 
-        GUIStyle btnStyle = new GUIStyle(GUI.skin.button)
-        {
-            fontSize = 12,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
+// cached style used below
 
         if (isSelected)
         {
@@ -3347,7 +3427,7 @@ public class GridManager : MonoBehaviour
         }
 
         string label = $"{title}\n{cost} 🌙 • {statusLine}";
-        if (GUI.Button(rect, label, btnStyle))
+        if (GUI.Button(rect, label, s_PlantBtnStyle))
         {
             TrySelectPlant(type);
         }
@@ -3358,12 +3438,7 @@ public class GridManager : MonoBehaviour
         bool enoughBrains = currentBrains >= zombieCost;
         bool isReady = zombieCooldownTimer <= 0.001f && enoughBrains;
 
-        GUIStyle btnStyle = new GUIStyle(GUI.skin.button)
-        {
-            fontSize = 12,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
+// cached style used below
 
         if (isZombieSelected)
         {
@@ -3397,7 +3472,7 @@ public class GridManager : MonoBehaviour
         }
 
         string label = $"Zombie [4]\n{zombieCost} 🧠 • {statusLine}";
-        if (GUI.Button(targetRect, label, btnStyle))
+        if (GUI.Button(targetRect, label, s_ZombieBtnStyle))
         {
             TrySelectZombie();
         }
@@ -3415,26 +3490,9 @@ public class GridManager : MonoBehaviour
 
         Rect boxRect = new Rect((sw - 580f) * 0.5f, (sh - 280f) * 0.5f, 580f, 280f);
 
-        GUIStyle titleStyle = new GUIStyle(GUI.skin.label)
-        {
-            fontSize = 30,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
-
-        GUIStyle descStyle = new GUIStyle(GUI.skin.label)
-        {
-            fontSize = 15,
-            alignment = TextAnchor.MiddleCenter,
-            wordWrap = true
-        };
-
-        GUIStyle btnStyle = new GUIStyle(GUI.skin.button)
-        {
-            fontSize = 16,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter
-        };
+        GUIStyle titleStyle = s_GameOverTitleStyle;
+        GUIStyle descStyle = s_GameOverDescStyle;
+        GUIStyle btnStyle = s_GameOverBtnStyle;
 
         if (matchResult == MatchResult.PlantsWin)
         {
