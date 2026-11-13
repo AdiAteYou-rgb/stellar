@@ -1,11 +1,19 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+public enum ZombieType
+{
+    Normal = 0,
+    Buckethead = 1,
+    Bunny = 2
+}
+
 public class WallZombie : MonoBehaviour
 {
     public static readonly List<WallZombie> ActiveZombies = new List<WallZombie>();
 
     public GridManager gridManager;
+    public ZombieType zombieType = ZombieType.Normal;
     public int row;
     public float moveSpeed = 0.58f; // Walks forward (left) slowly at classic shambling pace
     public int maxHealth = 100;
@@ -44,12 +52,31 @@ public class WallZombie : MonoBehaviour
         ActiveZombies.Remove(this);
     }
 
-    public void Initialize(GridManager manager, int laneRow, Vector3 startPos)
+    public void Initialize(GridManager manager, int laneRow, Vector3 startPos, ZombieType type = ZombieType.Normal)
     {
         gridManager = manager;
+        zombieType = type;
         row = laneRow;
         transform.position = startPos;
         baseY = startPos.y;
+
+        switch (zombieType)
+        {
+            case ZombieType.Buckethead:
+                maxHealth = 500; // 5x normal zombie health
+                moveSpeed = 0.46f; // Slightly slower heavy tank pace
+                break;
+            case ZombieType.Bunny:
+                maxHealth = 80;
+                moveSpeed = 1.08f; // Fast hopping speed zombie
+                break;
+            case ZombieType.Normal:
+            default:
+                maxHealth = 100;
+                moveSpeed = 0.58f;
+                break;
+        }
+
         currentHealth = maxHealth;
         triggeredClash = false;
         CacheLimbs();
@@ -82,14 +109,17 @@ public class WallZombie : MonoBehaviour
             return;
         }
 
-        // Walk slowly forward (to the left along the row)
-        bobTimer += Time.deltaTime * 5.2f;
+        // Walk or hop forward (to the left along the row)
+        float bobFreq = (zombieType == ZombieType.Bunny) ? 8.5f : ((zombieType == ZombieType.Buckethead) ? 4.2f : 5.2f);
+        float bobAmp = (zombieType == ZombieType.Bunny) ? 0.16f : 0.08f;
+        bobTimer += Time.deltaTime * bobFreq;
+
         float newX = transform.position.x - (moveSpeed * Time.deltaTime);
-        float bobOffset = Mathf.Abs(Mathf.Sin(bobTimer)) * 0.08f;
+        float bobOffset = Mathf.Abs(Mathf.Sin(bobTimer)) * bobAmp;
         transform.position = new Vector3(newX, baseY + bobOffset, transform.position.z);
 
-        // Shambling zombie torso wobble
-        float wobbleZ = Mathf.Sin(bobTimer) * 4.5f;
+        // Shambling or hopping torso wobble
+        float wobbleZ = Mathf.Sin(bobTimer) * ((zombieType == ZombieType.Bunny) ? 6.5f : 4.5f);
         transform.rotation = Quaternion.Euler(0f, 0f, wobbleZ);
 
         // Animate limbs if found

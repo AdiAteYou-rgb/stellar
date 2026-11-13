@@ -165,6 +165,8 @@ public class MultiplayerMenuManager : MonoBehaviour
         gameplayWallGrid.OnArenaStunLocal -= HandleArenaStun;
         gameplayWallGrid.OnArenaAbilityFxLocal -= HandleArenaAbilityFx;
         gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
+        gameplayWallGrid.OnArenaAttackHitLocal -= HandleArenaAttackHit;
+        gameplayWallGrid.OnArenaParriedLocal -= HandleArenaParried;
 
         gameplayWallGrid.OnPlantPlacedLocal += HandleLocalPlantPlaced;
         gameplayWallGrid.OnZombiePlacedLocal += HandleLocalZombiePlaced;
@@ -179,6 +181,8 @@ public class MultiplayerMenuManager : MonoBehaviour
         gameplayWallGrid.OnArenaStunLocal += HandleArenaStun;
         gameplayWallGrid.OnArenaAbilityFxLocal += HandleArenaAbilityFx;
         gameplayWallGrid.OnArenaSeedLocal += HandleArenaSeed;
+        gameplayWallGrid.OnArenaAttackHitLocal += HandleArenaAttackHit;
+        gameplayWallGrid.OnArenaParriedLocal += HandleArenaParried;
         gridEventsSubscribed = true;
     }
 
@@ -199,6 +203,8 @@ public class MultiplayerMenuManager : MonoBehaviour
             gameplayWallGrid.OnArenaStunLocal -= HandleArenaStun;
             gameplayWallGrid.OnArenaAbilityFxLocal -= HandleArenaAbilityFx;
             gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
+            gameplayWallGrid.OnArenaAttackHitLocal -= HandleArenaAttackHit;
+            gameplayWallGrid.OnArenaParriedLocal -= HandleArenaParried;
         }
         gridEventsSubscribed = false;
         StopNetwork();
@@ -807,9 +813,15 @@ public class MultiplayerMenuManager : MonoBehaviour
                 int.TryParse(coords[0], out int r) &&
                 int.TryParse(coords[1], out int c))
             {
+                ZombieType zType = ZombieType.Normal;
+                if (coords.Length >= 3)
+                {
+                    Enum.TryParse(coords[2], out zType);
+                }
+
                 if (gameplayWallGrid != null)
                 {
-                    gameplayWallGrid.SpawnZombieOnTile(r, c, notifyNetwork: false);
+                    gameplayWallGrid.SpawnZombieOnTile(r, c, zType, notifyNetwork: false);
                 }
             }
         }
@@ -880,6 +892,8 @@ public class MultiplayerMenuManager : MonoBehaviour
                 if (p.Length >= 3 && Enum.TryParse(p[2], out PlantType pt)) pType = pt;
                 PlayerRole remoteRole = PlayerRole.None;
                 if (p.Length >= 4 && Enum.TryParse(p[3], out PlayerRole rr)) remoteRole = rr;
+                ZombieType zType = ZombieType.Normal;
+                if (p.Length >= 5 && Enum.TryParse(p[4], out ZombieType zt)) zType = zt;
 
                 // Sync local role from remote peer's role if needed
                 if (remoteRole == PlayerRole.Zombie && localRole != PlayerRole.Plant)
@@ -898,13 +912,14 @@ public class MultiplayerMenuManager : MonoBehaviour
                 if (gameplayWallGrid != null)
                 {
                     gameplayWallGrid.gameplayActive = true;
-                    gameplayWallGrid.TriggerRemoteClash(r, c, pType, remoteRole);
+                    gameplayWallGrid.TriggerRemoteClash(r, c, pType, remoteRole, zType);
                 }
             }
             else if (msg.StartsWith("APOSE:"))
             {
                 string[] p = msg.Substring(6).Split(',');
-                gameplayWallGrid.SetRemoteArenaPose(new Vector3(PF(p[0]), PF(p[1]), PF(p[2])), PF(p[3]));
+                int stateFlags = (p.Length >= 5 && int.TryParse(p[4], out int sf)) ? sf : 0;
+                gameplayWallGrid.SetRemoteArenaPose(new Vector3(PF(p[0]), PF(p[1]), PF(p[2])), PF(p[3]), stateFlags);
             }
             else if (msg.StartsWith("ARESULT:"))
             {
@@ -914,6 +929,22 @@ public class MultiplayerMenuManager : MonoBehaviour
             {
                 float dur = PF(msg.Substring(6));
                 gameplayWallGrid.ApplyLocalArenaImmobilize(dur);
+            }
+            else if (msg.StartsWith("AHIT:"))
+            {
+                string[] p = msg.Substring(5).Split(',');
+                if (p.Length >= 2)
+                {
+                    gameplayWallGrid.ApplyRemoteArenaDamage(int.Parse(p[0]), PF(p[1]));
+                }
+            }
+            else if (msg.StartsWith("APARRY:"))
+            {
+                string[] p = msg.Substring(7).Split(',');
+                if (p.Length >= 2)
+                {
+                    gameplayWallGrid.ApplyRemoteParryNotification(int.Parse(p[0]), int.Parse(p[1]));
+                }
             }
             else if (msg.StartsWith("AFX:"))
             {
@@ -956,14 +987,14 @@ public class MultiplayerMenuManager : MonoBehaviour
         SendNetworkMessage("MOONGET:" + string.Join(",", ids));
     }
 
-    private void HandleClashStarted(int row, int col, PlantType pType, PlayerRole role)
+    private void HandleClashStarted(int row, int col, PlantType pType, PlayerRole role, ZombieType zType)
     {
-        SendNetworkMessage($"CLASH:{row},{col},{pType},{role}");
+        SendNetworkMessage($"CLASH:{row},{col},{pType},{role},{zType}");
     }
 
-    private void HandleArenaPose(Vector3 pos, float yaw)
+    private void HandleArenaPose(Vector3 pos, float yaw, int stateFlags)
     {
-        SendNetworkMessage($"APOSE:{F(pos.x)},{F(pos.y)},{F(pos.z)},{F(yaw)}");
+        SendNetworkMessage($"APOSE:{F(pos.x)},{F(pos.y)},{F(pos.z)},{F(yaw)},{stateFlags}");
     }
 
     private void HandleArenaResolved(bool zombieWon)
@@ -974,6 +1005,16 @@ public class MultiplayerMenuManager : MonoBehaviour
     private void HandleArenaStun(float duration)
     {
         SendNetworkMessage($"ASTUN:{F(duration)}");
+    }
+
+    private void HandleArenaAttackHit(int damage, float stunDuration)
+    {
+        SendNetworkMessage($"AHIT:{damage},{F(stunDuration)}");
+    }
+
+    private void HandleArenaParried(int blockedDamage, int restoredHP)
+    {
+        SendNetworkMessage($"APARRY:{blockedDamage},{restoredHP}");
     }
 
     private void HandleArenaAbilityFx(string fxType, Vector3 start, Vector3 end)
@@ -1056,9 +1097,9 @@ public class MultiplayerMenuManager : MonoBehaviour
         SendNetworkMessage($"PLACE:{row},{col},{type}");
     }
 
-    private void HandleLocalZombiePlaced(int row, int col)
+    private void HandleLocalZombiePlaced(int row, int col, ZombieType type)
     {
-        SendNetworkMessage($"ZOMBIE:{row},{col}");
+        SendNetworkMessage($"ZOMBIE:{row},{col},{type}");
     }
 
     private void HandleLocalMatchEnded(GridManager.MatchResult result)

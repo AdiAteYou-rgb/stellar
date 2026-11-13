@@ -85,11 +85,16 @@ public static class GameVisuals
 
     public static GameObject CreateZombie(string name, bool isGhost, float tileWidth, float tileHeight)
     {
+        return CreateZombie(ZombieType.Normal, name, isGhost, tileWidth, tileHeight);
+    }
+
+    public static GameObject CreateZombie(ZombieType type, string name, bool isGhost, float tileWidth, float tileHeight)
+    {
         EnsureSpritesLoaded();
         GameObject root = new GameObject(name);
 
         SpriteRenderer sr = root.AddComponent<SpriteRenderer>();
-        Sprite spr = GetZombieSprite();
+        Sprite spr = GetZombieSprite(type);
         sr.sprite = spr;
         sr.sortingOrder = 15;
         if (isGhost)
@@ -153,10 +158,19 @@ public static class GameVisuals
         }
     }
 
-    public static Sprite GetZombieSprite()
+    public static Sprite GetZombieSprite(ZombieType type = ZombieType.Normal)
     {
         EnsureSpritesLoaded();
-        return cachedSprites.TryGetValue("Zombie", out var z) ? z : null;
+        switch (type)
+        {
+            case ZombieType.Buckethead:
+                return cachedSprites.TryGetValue("BucketheadZombie", out var bz) ? bz : (cachedSprites.TryGetValue("Zombie", out var z1) ? z1 : null);
+            case ZombieType.Bunny:
+                return cachedSprites.TryGetValue("BunnyZombie", out var rbz) ? rbz : (cachedSprites.TryGetValue("Zombie", out var z2) ? z2 : null);
+            case ZombieType.Normal:
+            default:
+                return cachedSprites.TryGetValue("Zombie", out var z) ? z : null;
+        }
     }
 
     public static Sprite GetMoonSprite()
@@ -173,12 +187,14 @@ public static class GameVisuals
 
     public static void EnsureSpritesLoaded()
     {
-        if (cachedSprites.Count >= 6) return;
+        if (cachedSprites.Count >= 8) return;
 
         LoadOrGenerateSprite("Moonflower", 256, 256, new Vector2(0.5f, 0.15f), 128f, GenerateMoonflowerTexture);
         LoadOrGenerateSprite("Rose", 256, 256, new Vector2(0.5f, 0.15f), 128f, GenerateRoseTexture);
         LoadOrGenerateSprite("Durian", 256, 256, new Vector2(0.5f, 0.15f), 128f, GenerateDurianTexture);
         LoadOrGenerateSprite("Zombie", 256, 256, new Vector2(0.5f, 0.12f), 128f, GenerateZombieTexture);
+        LoadOrGenerateSprite("BucketheadZombie", 256, 256, new Vector2(0.5f, 0.12f), 128f, GenerateBucketheadZombieTexture);
+        LoadOrGenerateSprite("BunnyZombie", 256, 256, new Vector2(0.5f, 0.12f), 128f, GenerateBunnyZombieTexture);
         LoadOrGenerateSprite("Moon", 256, 256, new Vector2(0.5f, 0.5f), 128f, GenerateMoonTexture);
         LoadOrGenerateSprite("RoseProjectile", 128, 128, new Vector2(0.5f, 0.5f), 100f, GenerateRoseProjectileTexture);
     }
@@ -675,6 +691,123 @@ public static class GameVisuals
         c.DrawCapsule(hx - 14f, hy + 34f, hx - 18f, hy + 46f, 2.5f, new Color32(33, 33, 33, 255));
         c.DrawCapsule(hx, hy + 35f, hx - 2f, hy + 49f, 2.5f, new Color32(33, 33, 33, 255));
         c.DrawCapsule(hx + 12f, hy + 33f, hx + 16f, hy + 44f, 2.5f, new Color32(33, 33, 33, 255));
+    }
+
+    private static void GenerateBucketheadZombieTexture(Canvas2D c)
+    {
+        // 1. Heavy ground shadow
+        c.DrawEllipse(128, 16, 62, 11, new Color32(15, 20, 25, 115));
+
+        // 2. Heavy steel-toed boots
+        c.DrawCapsule(100, 20, 118, 20, 9f, new Color32(60, 45, 40, 255), 2.5f, new Color32(25, 15, 12, 255));
+        c.DrawCapsule(138, 22, 156, 22, 9f, new Color32(60, 45, 40, 255), 2.5f, new Color32(25, 15, 12, 255));
+
+        // 3. Sturdy patched charcoal trousers
+        c.DrawCapsule(110, 26, 114, 75, 11f, new Color32(55, 65, 75, 255), 3f, new Color32(20, 25, 30, 255));
+        c.DrawCapsule(146, 28, 142, 75, 11f, new Color32(62, 72, 84, 255), 3f, new Color32(20, 25, 30, 255));
+
+        // 4. Heavy Charcoal / Iron-Brown Coat with Shoulder Pads & Belt
+        c.DrawRect(92, 74, 74, 70, new Color32(78, 62, 54, 255), 9f, 3.5f, new Color32(35, 24, 18, 255));
+        c.DrawRect(98, 72, 62, 28, new Color32(58, 44, 38, 255));
+        // Heavy utility belt & silver buckle
+        c.DrawRect(92, 82, 74, 10, new Color32(42, 30, 22, 255), 2f, 2f, new Color32(20, 14, 10, 255));
+        c.DrawRect(120, 80, 16, 14, new Color32(190, 200, 210, 255), 2f, 2f, new Color32(60, 70, 80, 255));
+
+        // Red tattered tie
+        c.DrawTriangle(new Vector2(124, 134), new Vector2(132, 134), new Vector2(128, 90), new Color32(198, 40, 40, 255), 2f, new Color32(100, 15, 15, 255));
+
+        // 5. Outstretched Arms
+        c.DrawCapsule(135, 118, 70, 115, 9f, new Color32(124, 179, 66, 255), 3f, new Color32(46, 71, 19, 255));
+        c.DrawCapsule(70, 115, 50, 114, 5.5f, new Color32(124, 179, 66, 255), 2f, new Color32(46, 71, 19, 255));
+        c.DrawCapsule(116, 128, 52, 132, 9.5f, new Color32(139, 195, 74, 255), 3f, new Color32(46, 71, 19, 255));
+        c.DrawCapsule(52, 132, 36, 135, 6f, new Color32(139, 195, 74, 255), 2.5f, new Color32(46, 71, 19, 255));
+
+        // 6. Green Zombie Head & Jaw
+        float hx = 132f;
+        float hy = 182f;
+        c.DrawRotatedEllipse(hx, hy, 38f, 35f, 5f, new Color32(124, 179, 66, 255), 4f, new Color32(46, 71, 19, 255));
+        c.DrawCapsule(hx - 22f, hy - 20f, hx + 4f, hy - 22f, 10f, new Color32(104, 159, 56, 255), 3f, new Color32(46, 71, 19, 255));
+        c.DrawCapsule(hx - 20f, hy - 16f, hx + 2f, hy - 17f, 4.5f, new Color32(30, 45, 15, 255));
+
+        // Eyes peeking out from under the bucket rim
+        c.DrawCircle(hx - 16f, hy + 2f, 12f, new Color32(255, 255, 255, 255), 2.5f, new Color32(33, 33, 33, 255));
+        c.DrawCircle(hx - 19f, hy + 2f, 5f, new Color32(20, 25, 20, 255));
+        c.DrawCircle(hx + 12f, hy + 1f, 9f, new Color32(255, 255, 255, 255), 2.5f, new Color32(33, 33, 33, 255));
+        c.DrawCircle(hx + 10f, hy + 1f, 3.5f, new Color32(20, 25, 20, 255));
+
+        // 7. Galvanized Metal Bucket Helmet on Top of Head!
+        // Bucket body (trapezoid/rounded cylinder tilted slightly forward)
+        c.DrawRect(hx - 36f, hy + 10f, 72f, 52f, new Color32(168, 179, 190, 255), 6f, 3.5f, new Color32(55, 65, 75, 255));
+        // Metallic sheen stripe on bucket
+        c.DrawRect(hx - 20f, hy + 14f, 16f, 44f, new Color32(215, 225, 235, 220));
+        // Bucket bottom rim (now at the top of the inverted bucket)
+        c.DrawCapsule(hx - 32f, hy + 61f, hx + 32f, hy + 61f, 5f, new Color32(140, 152, 165, 255), 2.5f, new Color32(50, 60, 70, 255));
+        // Bucket mouth rim (resting over zombie brow)
+        c.DrawCapsule(hx - 40f, hy + 11f, hx + 40f, hy + 9f, 6.5f, new Color32(190, 202, 214, 255), 3f, new Color32(45, 55, 65, 255));
+        // Red paint smudge on the bucket (classic PvZ detail)
+        c.DrawRotatedEllipse(hx - 6f, hy + 36f, 12f, 7f, -20f, new Color32(215, 45, 45, 235));
+        // Wire bail handle hanging down across front
+        c.DrawCapsule(hx + 34f, hy + 22f, hx - 28f, hy - 2f, 2.5f, new Color32(210, 220, 230, 255), 1.5f, new Color32(45, 55, 65, 255));
+    }
+
+    private static void GenerateBunnyZombieTexture(Canvas2D c)
+    {
+        // 1. Ground shadow
+        c.DrawEllipse(128, 16, 52, 9, new Color32(15, 20, 25, 95));
+
+        // 2. Bright Sporty Orange & White Running Sneakers
+        c.DrawCapsule(96, 20, 114, 20, 8f, new Color32(255, 109, 0, 255), 2.5f, new Color32(80, 30, 0, 255));
+        c.DrawCapsule(98, 16, 114, 16, 3f, new Color32(255, 255, 255, 255));
+        c.DrawCapsule(140, 24, 158, 24, 8f, new Color32(255, 109, 0, 255), 2.5f, new Color32(80, 30, 0, 255));
+        c.DrawCapsule(142, 20, 158, 20, 3f, new Color32(255, 255, 255, 255));
+
+        // 3. Dark Navy Athletic Track Pants with White Side Stripes
+        c.DrawCapsule(106, 26, 114, 76, 9f, new Color32(30, 41, 59, 255), 3f, new Color32(15, 23, 42, 255));
+        c.DrawCapsule(148, 28, 140, 76, 9f, new Color32(30, 41, 59, 255), 3f, new Color32(15, 23, 42, 255));
+        c.DrawCapsule(104, 30, 112, 72, 2f, new Color32(240, 248, 255, 230));
+
+        // 4. Fluffy White Bunny Tail on the back (+X side)
+        c.DrawCircle(166, 80, 14f, new Color32(250, 250, 255, 255), 3f, new Color32(140, 150, 170, 255));
+        c.DrawCircle(168, 82, 9f, new Color32(255, 255, 255, 255));
+
+        // 5. Vibrant Teal & Coral Sporty Hoodie / Tracksuit Jacket (distinct clothing!)
+        c.DrawRect(98, 75, 62, 66, new Color32(0, 172, 193, 255), 10f, 3.5f, new Color32(0, 77, 90, 255));
+        // Coral/Orange V-chest racing panel & white stripes
+        c.DrawTriangle(new Vector2(102, 138), new Vector2(156, 138), new Vector2(129, 92), new Color32(255, 112, 67, 255), 2f, new Color32(140, 40, 15, 255));
+        c.DrawRect(98, 102, 62, 7, new Color32(255, 255, 255, 245));
+
+        // 6. Fast Runner Outstretched Arms
+        c.DrawCapsule(135, 118, 68, 118, 7.5f, new Color32(139, 195, 74, 255), 3f, new Color32(46, 71, 19, 255));
+        c.DrawCapsule(116, 128, 50, 134, 8f, new Color32(156, 204, 101, 255), 3f, new Color32(46, 71, 19, 255));
+        // Orange sporty wristbands
+        c.DrawCapsule(66, 118, 74, 118, 8.5f, new Color32(255, 109, 0, 255), 2f, new Color32(90, 30, 0, 255));
+        c.DrawCapsule(54, 134, 62, 134, 9f, new Color32(255, 109, 0, 255), 2f, new Color32(90, 30, 0, 255));
+
+        // 7. Agile Zombie Head + Sporty Headband
+        float hx = 128f;
+        float hy = 180f;
+        c.DrawRotatedEllipse(hx, hy, 35f, 33f, 8f, new Color32(139, 195, 74, 255), 3.5f, new Color32(46, 71, 19, 255));
+        // Bucktooth bunny-zombie grin
+        c.DrawCapsule(hx - 18f, hy - 16f, hx + 4f, hy - 17f, 4.5f, new Color32(30, 45, 15, 255));
+        c.DrawRect(hx - 14f, hy - 22f, 6f, 8f, new Color32(255, 255, 255, 255), 1f, 1.5f, new Color32(60, 60, 60, 255));
+        c.DrawRect(hx - 7f, hy - 22f, 6f, 8f, new Color32(255, 255, 255, 255), 1f, 1.5f, new Color32(60, 60, 60, 255));
+
+        // Energetic wide eyes
+        c.DrawCircle(hx - 14f, hy + 4f, 12f, new Color32(255, 255, 255, 255), 2.5f, new Color32(33, 33, 33, 255));
+        c.DrawCircle(hx - 17f, hy + 4f, 5f, new Color32(20, 25, 20, 255));
+        c.DrawCircle(hx + 12f, hy + 3f, 10f, new Color32(255, 255, 255, 255), 2.5f, new Color32(33, 33, 33, 255));
+        c.DrawCircle(hx + 9f, hy + 3f, 4f, new Color32(20, 25, 20, 255));
+
+        // Coral/White Sweatband around forehead
+        c.DrawCapsule(hx - 30f, hy + 19f, hx + 28f, hy + 16f, 5.5f, new Color32(255, 87, 34, 255), 2.5f, new Color32(90, 20, 5, 255));
+
+        // 8. Tall Expressive Bunny Ears on Top of Head!
+        // Left Bunny Ear (tilted slightly forward)
+        c.DrawRotatedEllipse(hx - 12f, hy + 48f, 10f, 28f, 12f, new Color32(248, 250, 252, 255), 3f, new Color32(71, 85, 105, 255));
+        c.DrawRotatedEllipse(hx - 12f, hy + 47f, 5f, 20f, 12f, new Color32(244, 114, 182, 255));
+        // Right Bunny Ear (tilted slightly back)
+        c.DrawRotatedEllipse(hx + 14f, hy + 47f, 10f, 28f, -16f, new Color32(248, 250, 252, 255), 3f, new Color32(71, 85, 105, 255));
+        c.DrawRotatedEllipse(hx + 14f, hy + 46f, 5f, 20f, -16f, new Color32(244, 114, 182, 255));
     }
 
     private static void GenerateMoonTexture(Canvas2D c)

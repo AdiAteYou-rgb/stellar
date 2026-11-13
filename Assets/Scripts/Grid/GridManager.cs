@@ -54,25 +54,33 @@ public class GridManager : MonoBehaviour
     public float moonClusterPickupRadius = 3.2f;
     private float skyMoonTimer = 0f;
 
-    [Header("Plant Costs & Cooldowns")]
+    [Header("Plant Costs & Cooldowns (PvZ Style)")]
     public int moonflowerCost = 50;
     public float moonflowerCooldown = 5.0f;
 
     public int roseCost = 100;
-    public float roseCooldown = 5.0f;
+    public float roseCooldown = 7.5f;
     public int rozeCost { get => roseCost; set => roseCost = value; }
     public float rozeCooldown { get => roseCooldown; set => roseCooldown = value; }
 
     public int durianCost = 50;
-    public float durianCooldown = 30.0f;
+    public float durianCooldown = 20.0f;
 
-    [Header("Zombie Player: Brains & Zombie Spawning")]
+    [Header("Zombie Player: Brains & Zombie Spawning (PvZ Cooldowns)")]
     public int currentBrains = 150;
     public int zombieCost = 50;
-    public float zombieCooldown = 2.0f; // Snappy 2.0s spawn cooldown for active zombie offensive
+    public float zombieCooldown = 5.0f; // Normal Zombie [4]
+
+    public int bucketheadCost = 100;
+    public float bucketheadCooldown = 12.0f; // Buckethead [5] (5x Health)
+
+    public int bunnyCost = 75;
+    public float bunnyCooldown = 7.5f; // Bunny Speed Zombie [6]
+
     public float passiveBrainInterval = 10.0f;
     public int passiveBrainAmount = 25;
     private float zombieCooldownTimer = 0f;
+    private readonly float[] zombieCooldownTimers = new float[3];
     private float passiveBrainTimer = 0f;
 
     [Header("Zombie Placement Restriction")]
@@ -83,6 +91,7 @@ public class GridManager : MonoBehaviour
     public bool isPlantSelected = false;
     public PlantType selectedPlantType = PlantType.Moonflower;
     public bool isZombieSelected = false;
+    public ZombieType selectedZombieType = ZombieType.Normal;
 
     [Header("Clash Zoom & 3D 1v1 Arena")]
     public float clashZoomDuration = 1.35f;
@@ -105,18 +114,20 @@ public class GridManager : MonoBehaviour
     public Color tileOccupiedColor = new Color(0.85f, 0.30f, 0.25f, 1.0f);
 
     public event Action<int, int, PlantType> OnPlantPlacedLocal;
-    public event Action<int, int> OnZombiePlacedLocal;
+    public event Action<int, int, ZombieType> OnZombiePlacedLocal;
 
     // ===== Network sync events (moons, clash, 3D arena) =====
     public event Action<int, Vector3, float, int> OnSkyMoonSpawnedLocal;      // id, startPos, landingY, value
     public event Action<int, Vector3, int> OnFlowerMoonSpawnedLocal;           // id, flowerPos, value
     public event Action<System.Collections.Generic.List<int>> OnMoonsCollectedLocal;
-    public event Action<int, int, PlantType, MultiplayerMenuManager.PlayerRole> OnClashStartedLocal; // plant row, col, plantType, senderRole
-    public event Action<Vector3, float> OnArenaPoseLocal;                      // position, yaw
+    public event Action<int, int, PlantType, MultiplayerMenuManager.PlayerRole, ZombieType> OnClashStartedLocal; // plant row, col, plantType, senderRole, zombieType
+    public event Action<Vector3, float, int> OnArenaPoseLocal;                 // position, yaw, stateFlags (bit1=BunnySlide, bit2=BucketParry, bit3=ParrySpeed)
     public event Action<bool> OnArenaResolvedLocal;                            // true = zombie won
     public event Action<float> OnArenaStunLocal;                               // duration in seconds (Durian immobilize)
     public event Action<string, Vector3, Vector3> OnArenaAbilityFxLocal;       // fxType, startPos, endPos
     public event Action<int> OnArenaSeedLocal;                                 // synced random seed for 3D arena layout
+    public event Action<int, float> OnArenaAttackHitLocal;                     // damage, stunDuration
+    public event Action<int, int> OnArenaParriedLocal;                         // blockedDamage, restoredHP
 
     private int nextMoonId = 1;
     public bool IsIn3DArena => isIn3DArena;
@@ -125,6 +136,15 @@ public class GridManager : MonoBehaviour
 
     // 3D arena remote player avatar & random layout seed
     private GameObject remoteArenaAvatar;
+    private CapsuleCollider remoteBodyHitbox;
+    private SphereCollider remoteHeadHitbox;
+    private Transform remoteZombieVisualRoot;
+    private GameObject remoteParryShieldObj;
+    private bool remoteIsBunnySliding = false;
+    private bool remoteIsBucketParrying = false;
+    private bool remoteHasParrySpeedBuff = false;
+    private bool remoteIsFeralLunging = false;
+
     private GameObject arenaObstaclesRoot;
     private Renderer arenaFloorRenderer;
     private int currentArenaLayoutSeed = 0;
@@ -149,23 +169,54 @@ public class GridManager : MonoBehaviour
     private float remoteHitFlashTimer = 0f;
     private float remoteImmobilizedTimer = 0f;
 
-    // Ability timers
-    private float arenaAbilityCooldownTimer = 0f;
+    // Ability cooldown & active timers (Primary & Secondary abilities)
+    private float arenaAbilityCooldownTimer = 0f; // Primary attack cooldown
+    private float arenaPrimaryMaxCooldown = 1.0f;
+    private float arenaSecondaryCooldownTimer = 0f; // Special ability cooldown
+    private float arenaSecondaryMaxCooldown = 5.0f;
+
     private bool isChargingMoonBeam = false;
     private float moonBeamChargeTimer = 0f;
-    public float moonBeamChargeDuration = 2.0f;
+    public float moonBeamChargeDuration = 1.6f;
     private GameObject localMoonChargeOrb;
 
     private bool isChargingRoseThorn = false;
     private float roseThornChargeTimer = 0f;
-    public float roseThornChargeDuration = 0.4f;
+    public float roseThornChargeDuration = 0.25f;
 
     private bool isDurianRollingLocal = false;
     private float durianRollTimer = 0f;
     public float durianRollDuration = 2.6f;
     private GameObject localDurianRollVisual;
 
-    // Arena result (host presses N / M)
+    // Buckethead Parry Ability (1.0s active parry window, 5.0s cooldown, 3.0s speed boost proportional to damage)
+    public float bucketParryDuration = 1.0f;
+    public float bucketParryCooldown = 5.0f;
+    public float bucketParrySpeedDuration = 3.0f;
+    private bool isBucketParryingLocal = false;
+    private float bucketParryTimer = 0f;
+    private GameObject localBucketParryVisual;
+
+    // Bunny Zombie Slide Ability (lowers hitbox, faster speed while sliding, 3D sliding model pose)
+    public float bunnySlideDuration = 0.90f;
+    public float bunnySlideCooldown = 3.0f;
+    private bool isBunnySlidingLocal = false;
+    private float bunnySlideTimer = 0f;
+    private GameObject localBunnySlideVisual;
+
+    // Feral Lunge Dive Ability (fast forward dive pounce with diving POV arms & diving 3D pose toward the Plant player)
+    public float feralLungeDuration = 0.65f;
+    public float feralLungeCooldown = 3.5f;
+    private bool isFeralLungingLocal = false;
+    private float feralLungeTimer = 0f;
+    private bool feralLungeHitDealt = false;
+    private GameObject localFeralLungeVisual;
+
+    // Solo sparring bot timer (only active when testing solo without a second networked player)
+    private float soloBotActionTimer = 2.2f;
+    private float soloBotStrafePhase = 0f;
+
+    // Arena result (host presses N / M or automatic when HP reaches 0)
     private bool arenaResolving = false;
     private bool arenaZombieWon = false;
     private float arenaResolveTimer = 0f;
@@ -176,6 +227,7 @@ public class GridManager : MonoBehaviour
     private Renderer[,] tileRenderers;
     private GameObject tilesContainer;
     private readonly GameObject[] previewGhosts = new GameObject[3];
+    private readonly GameObject[] zombiePreviewGhosts = new GameObject[3];
     private GameObject zombiePreviewGhost;
 
     private int hoveredRow = -1;
@@ -191,16 +243,22 @@ public class GridManager : MonoBehaviour
     private float clashRetrySendTimer = 0f;
     private bool localInitiatedCurrentClash = false;
 
-    // Top-left UI layout rects (Moon Bank + 3 Plant Buttons + Brain Bank + Zombie Button)
-    private readonly Rect moonBankRect = new Rect(12f, 12f, 110f, 66f);
+    // Top-left UI layout rects (Moon Bank + 3 Plant Buttons + Brain Bank + 3 Zombie Buttons)
+    private readonly Rect moonBankRect = new Rect(12f, 12f, 106f, 66f);
     private readonly Rect[] plantButtonRects = new Rect[3]
     {
-        new Rect(126f, 12f, 125f, 66f),
-        new Rect(255f, 12f, 125f, 66f),
-        new Rect(384f, 12f, 125f, 66f)
+        new Rect(122f, 12f, 124f, 66f),
+        new Rect(250f, 12f, 124f, 66f),
+        new Rect(378f, 12f, 124f, 66f)
     };
-    private readonly Rect brainBankRect = new Rect(12f, 82f, 110f, 66f);
-    private readonly Rect zombieButtonRect = new Rect(126f, 82f, 150f, 66f);
+    private readonly Rect brainBankRect = new Rect(12f, 82f, 106f, 66f);
+    private readonly Rect[] zombieButtonRects = new Rect[3]
+    {
+        new Rect(122f, 82f, 124f, 66f),
+        new Rect(250f, 82f, 128f, 66f),
+        new Rect(382f, 82f, 124f, 66f)
+    };
+    private readonly Rect zombieButtonRect = new Rect(122f, 82f, 124f, 66f);
 
     public float TileWidth => columns > 0 ? wallWidth / columns : 2.0f;
     public float TileHeight => rows > 0 ? wallHeight / rows : 1.8f;
@@ -429,16 +487,21 @@ public class GridManager : MonoBehaviour
             previewGhosts[i].SetActive(false);
         }
 
-        if (zombiePreviewGhost != null)
+        for (int i = 0; i < 3; i++)
         {
-            Destroy(zombiePreviewGhost);
+            if (zombiePreviewGhosts[i] != null)
+            {
+                Destroy(zombiePreviewGhosts[i]);
+            }
+            zombiePreviewGhosts[i] = CreateZombieVisual((ZombieType)i, $"ZombiePreviewGhost_{(ZombieType)i}", isGhost: true);
+            if (tilesContainer != null)
+            {
+                zombiePreviewGhosts[i].transform.SetParent(tilesContainer.transform, true);
+            }
+            zombiePreviewGhosts[i].SetActive(false);
         }
-        zombiePreviewGhost = CreateZombieVisual("ZombiePreviewGhost", isGhost: true);
-        if (tilesContainer != null)
-        {
-            zombiePreviewGhost.transform.SetParent(tilesContainer.transform, true);
-        }
-        zombiePreviewGhost.SetActive(false);
+
+        zombiePreviewGhost = zombiePreviewGhosts[0];
     }
 
     private void Update()
@@ -541,12 +604,19 @@ public class GridManager : MonoBehaviour
             return;
         }
 
-        // Tick down plant & zombie cooldowns
+        // Tick down PvZ-style plant & zombie seed packet cooldowns
         for (int i = 0; i < cooldownTimers.Length; i++)
         {
             if (cooldownTimers[i] > 0f)
             {
                 cooldownTimers[i] = Mathf.Max(0f, cooldownTimers[i] - Time.deltaTime);
+            }
+        }
+        for (int i = 0; i < zombieCooldownTimers.Length; i++)
+        {
+            if (zombieCooldownTimers[i] > 0f)
+            {
+                zombieCooldownTimers[i] = Mathf.Max(0f, zombieCooldownTimers[i] - Time.deltaTime);
             }
         }
         if (zombieCooldownTimer > 0f)
@@ -570,7 +640,7 @@ public class GridManager : MonoBehaviour
             currentBrains += passiveBrainAmount;
         }
 
-        // Hotkeys: 1, 2, 3 only available if player is allowed to place plants; 4 only if allowed to place zombies
+        // Hotkeys: 1, 2, 3 for Plants; 4, 5, 6 for Zombies (Normal, Buckethead, Bunny)
         if (canPlacePlants)
         {
             if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1))
@@ -591,7 +661,15 @@ public class GridManager : MonoBehaviour
         {
             if (Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4))
             {
-                TrySelectZombie();
+                TrySelectZombie(ZombieType.Normal);
+            }
+            else if (Input.GetKeyDown(KeyCode.Alpha5) || Input.GetKeyDown(KeyCode.Keypad5))
+            {
+                TrySelectZombie(ZombieType.Buckethead);
+            }
+            else if (Input.GetKeyDown(KeyCode.Alpha6) || Input.GetKeyDown(KeyCode.Keypad6))
+            {
+                TrySelectZombie(ZombieType.Bunny);
             }
         }
 
@@ -646,6 +724,7 @@ public class GridManager : MonoBehaviour
     private int clashingPlantRow = -1;
     private int clashingPlantCol = -1;
     private PlantType clashingPlantType = PlantType.Rose;
+    private ZombieType clashingZombieType = ZombieType.Normal;
 
     private MultiplayerMenuManager GetMenuManager()
     {
@@ -714,19 +793,21 @@ public class GridManager : MonoBehaviour
         }
 
         PlantType pType = (plant != null) ? plant.plantType : fallbackType;
+        ZombieType zType = (zombie != null) ? zombie.zombieType : clashingZombieType;
         int r = (plant != null) ? plant.row : (zombie != null ? zombie.row : 0);
         int c = (plant != null) ? plant.column : 0;
 
         clashingPlantRow = r;
         clashingPlantCol = c;
         clashingPlantType = pType;
+        clashingZombieType = zType;
 
         if (notifyNetwork)
         {
             localInitiatedCurrentClash = true;
             clashRetrySendTimer = 0.22f;
             currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
-            OnClashStartedLocal?.Invoke(r, c, pType, GetEffectiveLocalRole());
+            OnClashStartedLocal?.Invoke(r, c, pType, GetEffectiveLocalRole(), zType);
             OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
         }
         else
@@ -767,15 +848,16 @@ public class GridManager : MonoBehaviour
     /// <summary>Called when the other player reports a clash, so both players enter the 3D arena together.</summary>
     public void TriggerRemoteClash(int row, int col)
     {
-        TriggerRemoteClash(row, col, PlantType.Rose, MultiplayerMenuManager.PlayerRole.None);
+        TriggerRemoteClash(row, col, PlantType.Rose, MultiplayerMenuManager.PlayerRole.None, ZombieType.Normal);
     }
 
-    public void TriggerRemoteClash(int row, int col, PlantType plantType, MultiplayerMenuManager.PlayerRole remoteInitiatorRole = MultiplayerMenuManager.PlayerRole.None)
+    public void TriggerRemoteClash(int row, int col, PlantType plantType, MultiplayerMenuManager.PlayerRole remoteInitiatorRole = MultiplayerMenuManager.PlayerRole.None, ZombieType zombieType = ZombieType.Normal)
     {
         gameplayActive = true;
         clashingPlantRow = row;
         clashingPlantCol = col;
         clashingPlantType = plantType;
+        clashingZombieType = zombieType;
 
         // Auto-reconcile local role if remote role was specified
         if (remoteInitiatorRole == MultiplayerMenuManager.PlayerRole.Zombie)
@@ -805,6 +887,15 @@ public class GridManager : MonoBehaviour
             if (d < bestDist) { bestDist = d; best = z; }
         }
 
+        if (best != null)
+        {
+            clashingZombieType = best.zombieType;
+        }
+        else
+        {
+            clashingZombieType = zombieType;
+        }
+
         TriggerZombiePlantClash(best, plant, plantType, notifyNetwork: false);
     }
 
@@ -820,7 +911,7 @@ public class GridManager : MonoBehaviour
             if (clashRetrySendTimer <= 0f)
             {
                 clashRetrySendTimer = 0.25f;
-                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole());
+                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole(), clashingZombieType);
                 OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
             }
         }
@@ -874,12 +965,14 @@ public class GridManager : MonoBehaviour
         MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
         bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
         PlantType activePlant = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+        ZombieType activeZombie = (clashingZombie != null) ? clashingZombie.zombieType : clashingZombieType;
         clashingPlantType = activePlant;
+        clashingZombieType = activeZombie;
 
-        // Reset 3D Arena HP & combat states (attacks count as hits without reducing HP)
-        localArenaMaxHP = isZombie ? 150 : GetPlantMaxArenaHP(activePlant);
+        // Initialize 3D Arena HP based on specific PlantType & ZombieType (Buckethead = 400 HP, Bunny = 90 HP, Normal = 150 HP)
+        localArenaMaxHP = isZombie ? GetZombieMaxArenaHP(activeZombie) : GetPlantMaxArenaHP(activePlant);
         localArenaCurrentHP = localArenaMaxHP;
-        remoteArenaMaxHP = isZombie ? GetPlantMaxArenaHP(activePlant) : 150;
+        remoteArenaMaxHP = isZombie ? GetPlantMaxArenaHP(activePlant) : GetZombieMaxArenaHP(activeZombie);
         remoteArenaCurrentHP = remoteArenaMaxHP;
 
         arenaHitsLanded = 0;
@@ -887,12 +980,25 @@ public class GridManager : MonoBehaviour
         remoteHitFlashTimer = 0f;
         remoteImmobilizedTimer = 0f;
         arenaAbilityCooldownTimer = 0f;
+        arenaSecondaryCooldownTimer = 0f;
         isChargingMoonBeam = false;
         moonBeamChargeTimer = 0f;
         isChargingRoseThorn = false;
         roseThornChargeTimer = 0f;
         isDurianRollingLocal = false;
         durianRollTimer = 0f;
+        isBucketParryingLocal = false;
+        bucketParryTimer = 0f;
+        isBunnySlidingLocal = false;
+        bunnySlideTimer = 0f;
+        isFeralLungingLocal = false;
+        feralLungeTimer = 0f;
+        feralLungeHitDealt = false;
+        remoteIsBunnySliding = false;
+        remoteIsBucketParrying = false;
+        remoteHasParrySpeedBuff = false;
+        remoteIsFeralLunging = false;
+        soloBotActionTimer = 2.2f;
 
         // Ensure 3D Arena environment exists with the remote opponent avatar (Plant or Zombie)
         BuildOrShow3DArenaEnvironment();
@@ -904,19 +1010,62 @@ public class GridManager : MonoBehaviour
         if (chosenPlayer != null && targetCamera != null)
         {
             chosenPlayer.inputFrozen = false;
+            chosenPlayer.characterSpeedMultiplier = GetArenaCharacterSpeedMultiplier(isZombie, activePlant, activeZombie);
+            chosenPlayer.characterBaseFovBonus = GetArenaCharacterFovBonus(isZombie, activeZombie);
             chosenPlayer.EnterFirstPersonArena(targetCamera, arenaSpawnPos, arenaSpawnRot, currentArenaOpponentName);
         }
     }
 
     private int GetPlantMaxArenaHP(PlantType type)
     {
-        return (type == PlantType.Durian) ? 400 : 100;
+        return (type == PlantType.Durian) ? 400 : 125;
+    }
+
+    private int GetZombieMaxArenaHP(ZombieType type)
+    {
+        switch (type)
+        {
+            case ZombieType.Buckethead: return 400; // Buckethead has 400 combat HP
+            case ZombieType.Bunny:      return 90;  // Bunny speed zombie has lower combat HP
+            case ZombieType.Normal:
+            default:                    return 150;
+        }
+    }
+
+    private float GetArenaCharacterSpeedMultiplier(bool isZombie, PlantType pType, ZombieType zType)
+    {
+        if (isZombie)
+        {
+            switch (zType)
+            {
+                case ZombieType.Buckethead: return 0.86f; // A tiny bit slower
+                case ZombieType.Bunny:      return 1.44f; // Noticeably faster base movement speed
+                case ZombieType.Normal:
+                default:                    return 1.15f; // Faster zombie base speed for chasing plants
+            }
+        }
+        else
+        {
+            return (pType == PlantType.Durian) ? 0.92f : 1.0f;
+        }
+    }
+
+    private float GetArenaCharacterFovBonus(bool isZombie, ZombieType zType)
+    {
+        if (!isZombie) return 0f;
+        switch (zType)
+        {
+            case ZombieType.Bunny:      return 14f; // Higher FOV (89°) to give the illusion of lunging for the Plant player
+            case ZombieType.Normal:     return 9f;  // Higher FOV (84°) for aggressive zombie chase feel
+            case ZombieType.Buckethead: return 4f;
+            default:                    return 8f;
+        }
     }
 
     private static readonly Vector3 ArenaPlantSpawn = new Vector3(0f, 1.5f, -38.0f);
     private static readonly Vector3 ArenaZombieSpawn = new Vector3(0f, 1.5f, -14.0f);
 
-    /// <summary>Host decides the 1v1 result (N = zombie won, M = plant won). Shows a banner + pause, then returns to 2D.</summary>
+    /// <summary>Host decides the 1v1 result (N = zombie won, M = plant won) or triggered automatically when HP hits 0.</summary>
     public void ResolveArena(bool zombieWon, bool notifyNetwork = true)
     {
         if (arenaResolving) return;
@@ -986,18 +1135,23 @@ public class GridManager : MonoBehaviour
             if (clashRetrySendTimer <= 0f)
             {
                 clashRetrySendTimer = 0.35f;
-                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole());
+                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole(), clashingZombieType);
                 OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
             }
         }
 
-        // Send our pose ~20x per second
+        // Send our pose + active state flags ~20x per second
         PlayerController pc = GetPrimaryPlayerController();
         arenaPoseSendTimer -= Time.deltaTime;
         if (pc != null && arenaPoseSendTimer <= 0f)
         {
             arenaPoseSendTimer = 0.05f;
-            OnArenaPoseLocal?.Invoke(pc.transform.position, pc.transform.eulerAngles.y);
+            int stateFlags = 0;
+            if (isBunnySlidingLocal) stateFlags |= 1;
+            if (isBucketParryingLocal) stateFlags |= 2;
+            if (pc.parrySpeedBonusTimer > 0f) stateFlags |= 4;
+            if (isFeralLungingLocal) stateFlags |= 8;
+            OnArenaPoseLocal?.Invoke(pc.transform.position, pc.transform.eulerAngles.y, stateFlags);
         }
 
         // Smoothly move the remote avatar towards the latest received pose (unless immobilized by Durian)
@@ -1007,9 +1161,89 @@ public class GridManager : MonoBehaviour
             t.position = Vector3.Lerp(t.position, remoteArenaTargetPos, Time.deltaTime * 15f);
             t.rotation = Quaternion.Slerp(t.rotation, Quaternion.Euler(0f, remoteArenaTargetYaw, 0f), Time.deltaTime * 15f);
         }
+
+        UpdateRemoteAvatarVisualsAndHitbox();
     }
 
-    public void SetRemoteArenaPose(Vector3 pos, float yaw)
+    private void UpdateRemoteAvatarVisualsAndHitbox()
+    {
+        if (remoteArenaAvatar == null) return;
+
+        // 1. Update Remote Bunny Zombie Sliding Model & Lowered Hitbox (or Feral Lunge Diving Pose)!
+        if (remoteBodyHitbox != null && remoteHeadHitbox != null)
+        {
+            if (remoteIsBunnySliding)
+            {
+                remoteBodyHitbox.height = 0.95f;
+                remoteBodyHitbox.center = new Vector3(0f, -0.52f, 0f);
+                remoteHeadHitbox.center = new Vector3(0f, -0.22f, 0.22f);
+            }
+            else if (remoteIsFeralLunging)
+            {
+                remoteBodyHitbox.height = 1.45f;
+                remoteBodyHitbox.center = new Vector3(0f, -0.10f, 0.22f);
+                remoteHeadHitbox.center = new Vector3(0f, 0.20f, 0.45f);
+            }
+            else
+            {
+                remoteBodyHitbox.height = 2.0f;
+                remoteBodyHitbox.center = Vector3.zero;
+                remoteHeadHitbox.center = new Vector3(0f, 0.35f, 0f);
+            }
+        }
+
+        if (remoteZombieVisualRoot != null)
+        {
+            Vector3 targetLocalPos = remoteIsBunnySliding
+                ? new Vector3(0f, -0.52f, 0.18f)
+                : (remoteIsFeralLunging ? new Vector3(0f, 0.16f, 0.42f) : Vector3.zero);
+
+            Quaternion targetLocalRot = remoteIsBunnySliding
+                ? Quaternion.Euler(-58f, 0f, 0f)
+                : (remoteIsFeralLunging ? Quaternion.Euler(64f, 0f, 0f) : Quaternion.identity);
+
+            remoteZombieVisualRoot.localPosition = Vector3.Lerp(remoteZombieVisualRoot.localPosition, targetLocalPos, Time.deltaTime * 18f);
+            remoteZombieVisualRoot.localRotation = Quaternion.Slerp(remoteZombieVisualRoot.localRotation, targetLocalRot, Time.deltaTime * 18f);
+
+            // Pose legs & arms during slide or feral dive
+            Transform leftLeg = remoteZombieVisualRoot.Find("LeftLeg");
+            Transform rightLeg = remoteZombieVisualRoot.Find("RightLeg");
+            if (leftLeg != null && rightLeg != null)
+            {
+                Quaternion legRot = remoteIsBunnySliding
+                    ? Quaternion.Euler(-32f, 0f, 0f)
+                    : (remoteIsFeralLunging ? Quaternion.Euler(28f, 0f, 0f) : Quaternion.identity);
+                leftLeg.localRotation = Quaternion.Slerp(leftLeg.localRotation, legRot, Time.deltaTime * 18f);
+                rightLeg.localRotation = Quaternion.Slerp(rightLeg.localRotation, legRot, Time.deltaTime * 18f);
+            }
+
+            Transform leftArm = remoteZombieVisualRoot.Find("LeftArm");
+            Transform rightArm = remoteZombieVisualRoot.Find("RightArm");
+            if (leftArm != null && rightArm != null)
+            {
+                Quaternion leftArmRot = remoteIsFeralLunging ? Quaternion.Euler(35f, 18f, -15f) : Quaternion.Euler(82f, 0f, 0f);
+                Quaternion rightArmRot = remoteIsFeralLunging ? Quaternion.Euler(35f, -18f, 15f) : Quaternion.Euler(85f, 0f, 0f);
+                leftArm.localRotation = Quaternion.Slerp(leftArm.localRotation, leftArmRot, Time.deltaTime * 18f);
+                rightArm.localRotation = Quaternion.Slerp(rightArm.localRotation, rightArmRot, Time.deltaTime * 18f);
+            }
+        }
+
+        // 2. Update Remote Buckethead Parry Shield Visual!
+        if (remoteParryShieldObj != null)
+        {
+            if (remoteParryShieldObj.activeSelf != remoteIsBucketParrying)
+            {
+                remoteParryShieldObj.SetActive(remoteIsBucketParrying);
+            }
+            if (remoteIsBucketParrying)
+            {
+                float s = 1.0f + Mathf.Sin(Time.time * 22f) * 0.06f;
+                remoteParryShieldObj.transform.localScale = new Vector3(1.35f * s, 1.85f * s, 0.35f);
+            }
+        }
+    }
+
+    public void SetRemoteArenaPose(Vector3 pos, float yaw, int stateFlags = 0)
     {
         // If we started receiving 3D arena poses from the remote player before CLASH arrived, immediately enter the 3D arena!
         if (!isIn3DArena && !isZoomingIntoClash)
@@ -1021,6 +1255,11 @@ public class GridManager : MonoBehaviour
 
         remoteArenaTargetPos = pos;
         remoteArenaTargetYaw = yaw;
+        remoteIsBunnySliding = (stateFlags & 1) != 0;
+        remoteIsBucketParrying = (stateFlags & 2) != 0;
+        remoteHasParrySpeedBuff = (stateFlags & 4) != 0;
+        remoteIsFeralLunging = (stateFlags & 8) != 0;
+
         if (!hasRemoteArenaPose && remoteArenaAvatar != null)
         {
             remoteArenaAvatar.transform.SetPositionAndRotation(pos, Quaternion.Euler(0f, yaw, 0f));
@@ -1030,12 +1269,83 @@ public class GridManager : MonoBehaviour
 
     public void ApplyLocalArenaImmobilize(float duration)
     {
+        // If Buckethead is actively parrying, block the stun and trigger Parry Speed Boost!
+        if (isBucketParryingLocal)
+        {
+            TriggerLocalBucketParrySuccess(50);
+            return;
+        }
+
         PlayerController pc = GetPrimaryPlayerController();
         if (pc != null)
         {
             pc.Immobilize(duration);
             CancelAllActiveArenaAbilities(pc);
         }
+    }
+
+    public void ApplyRemoteArenaDamage(int damage, float stunDuration)
+    {
+        if (!isIn3DArena || arenaResolving) return;
+
+        // If Buckethead is inside his 1.0-second Parry window, parry the attack & convert its damage into movement speed!
+        if (isBucketParryingLocal)
+        {
+            TriggerLocalBucketParrySuccess(damage);
+            OnArenaParriedLocal?.Invoke(damage, localArenaCurrentHP);
+            return;
+        }
+
+        if (stunDuration > 0f)
+        {
+            ApplyLocalArenaImmobilize(stunDuration);
+        }
+
+        localArenaCurrentHP = Mathf.Max(0, localArenaCurrentHP - damage);
+        arenaHitIndicatorTimer = 0.75f;
+        arenaLastHitLabel = $"TOOK {damage} DMG!";
+
+        if (localArenaCurrentHP <= 0)
+        {
+            bool localIsZombie = GetEffectiveLocalRole() == MultiplayerMenuManager.PlayerRole.Zombie;
+            ResolveArena(zombieWon: !localIsZombie, notifyNetwork: true);
+        }
+    }
+
+    public void ApplyRemoteParryNotification(int blockedDamage, int restoredRemoteHP)
+    {
+        if (!isIn3DArena) return;
+        remoteArenaCurrentHP = Mathf.Clamp(restoredRemoteHP, 1, remoteArenaMaxHP);
+        UpdateRemoteWorldHPBarScale();
+
+        float bonusPct = Mathf.Clamp(blockedDamage * 1.8f, 25f, 140f);
+        arenaHitIndicatorTimer = 1.25f;
+        arenaLastHitLabel = $"🛡 PARRIED BY BUCKETHEAD! (+{bonusPct:F0}% ZOMBIE SPEED)";
+    }
+
+    private void TriggerLocalBucketParrySuccess(int incomingDamage)
+    {
+        isBucketParryingLocal = false;
+        bucketParryTimer = 0f;
+        if (localBucketParryVisual != null)
+        {
+            Destroy(localBucketParryVisual);
+            localBucketParryVisual = null;
+        }
+
+        // Stronger attack = more movement speed for 3 seconds!
+        float bonusPct = Mathf.Clamp(incomingDamage * 1.8f, 25f, 140f);
+        float speedMul = 1.0f + (bonusPct / 100f);
+
+        PlayerController pc = GetPrimaryPlayerController();
+        if (pc != null)
+        {
+            pc.ApplyParrySpeedBoost(speedMul, bucketParrySpeedDuration);
+            OnArenaAbilityFxLocal?.Invoke("PARRY", pc.transform.position, pc.transform.forward);
+        }
+
+        arenaHitIndicatorTimer = 1.5f;
+        arenaLastHitLabel = $"⚡ PARRIED {incomingDamage} DMG! +{bonusPct:F0}% SPEED FOR 3.0s! ⚡";
     }
 
     private void CancelAllActiveArenaAbilities(PlayerController pc)
@@ -1058,6 +1368,41 @@ public class GridManager : MonoBehaviour
         {
             Destroy(localDurianRollVisual);
             localDurianRollVisual = null;
+        }
+
+        isBucketParryingLocal = false;
+        bucketParryTimer = 0f;
+        if (localBucketParryVisual != null)
+        {
+            Destroy(localBucketParryVisual);
+            localBucketParryVisual = null;
+        }
+
+        StopBunnySlide(pc);
+        StopFeralLunge(pc);
+    }
+
+    private void StopBunnySlide(PlayerController pc)
+    {
+        isBunnySlidingLocal = false;
+        bunnySlideTimer = 0f;
+        if (pc != null) pc.isBunnySliding = false;
+        if (localBunnySlideVisual != null)
+        {
+            Destroy(localBunnySlideVisual);
+            localBunnySlideVisual = null;
+        }
+    }
+
+    private void StopFeralLunge(PlayerController pc)
+    {
+        isFeralLungingLocal = false;
+        feralLungeTimer = 0f;
+        if (pc != null) pc.isFeralLunging = false;
+        if (localFeralLungeVisual != null)
+        {
+            Destroy(localFeralLungeVisual);
+            localFeralLungeVisual = null;
         }
     }
 
@@ -1093,6 +1438,21 @@ public class GridManager : MonoBehaviour
         {
             arenaAbilityCooldownTimer = Mathf.Max(0f, arenaAbilityCooldownTimer - Time.deltaTime);
         }
+        if (arenaSecondaryCooldownTimer > 0f)
+        {
+            arenaSecondaryCooldownTimer = Mathf.Max(0f, arenaSecondaryCooldownTimer - Time.deltaTime);
+        }
+
+        MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
+        bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
+        PlantType activePlant = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+        ZombieType activeZombie = (clashingZombie != null) ? clashingZombie.zombieType : clashingZombieType;
+
+        // Solo sparring bot when testing without a remote player connected
+        if (!hasRemoteArenaPose && remoteArenaAvatar != null)
+        {
+            UpdateSoloArenaSparringBot(pc, isZombie, activePlant, activeZombie);
+        }
 
         // If immobilized by Durian roll, cancel active charges and block all attacks & abilities!
         if (pc.IsImmobilized)
@@ -1101,11 +1461,102 @@ public class GridManager : MonoBehaviour
             return;
         }
 
-        MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
-        bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
-        PlantType activePlant = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+        // 1. Tick active Buckethead 1.0s Parry Window
+        if (isBucketParryingLocal)
+        {
+            bucketParryTimer -= Time.deltaTime;
+            if (localBucketParryVisual == null && arena3DRoot != null)
+            {
+                localBucketParryVisual = CreateLocalParryShieldVisual();
+            }
+            if (localBucketParryVisual != null && targetCamera != null)
+            {
+                localBucketParryVisual.transform.position = targetCamera.transform.position + targetCamera.transform.forward * 0.72f + new Vector3(0f, -0.08f, 0f);
+                localBucketParryVisual.transform.rotation = targetCamera.transform.rotation;
+            }
 
-        // 1. Tick active Moonflower 2.0s Moon Beam Charge
+            if (bucketParryTimer <= 0f)
+            {
+                isBucketParryingLocal = false;
+                if (localBucketParryVisual != null)
+                {
+                    Destroy(localBucketParryVisual);
+                    localBucketParryVisual = null;
+                }
+            }
+        }
+
+        // 2. Tick active Bunny Zombie Slide (lowers hitbox, faster speed, sliding model visual)
+        if (isBunnySlidingLocal)
+        {
+            bunnySlideTimer -= Time.deltaTime;
+            pc.isBunnySliding = true;
+
+            if (localBunnySlideVisual == null && arena3DRoot != null)
+            {
+                localBunnySlideVisual = CreateLocalBunnySlideLegsVisual();
+            }
+            if (localBunnySlideVisual != null)
+            {
+                localBunnySlideVisual.transform.position = pc.transform.position + new Vector3(0f, -0.78f, 0f) + pc.transform.forward * 0.65f;
+                localBunnySlideVisual.transform.rotation = Quaternion.Euler(0f, pc.transform.eulerAngles.y, 0f);
+            }
+
+            if (bunnySlideTimer <= 0f)
+            {
+                StopBunnySlide(pc);
+            }
+        }
+
+        // 2b. Tick active Feral Charge / Lunge Dive (fast forward dive pounce with diving POV hands & 3D diving pose)
+        if (isFeralLungingLocal)
+        {
+            feralLungeTimer -= Time.deltaTime;
+            pc.isFeralLunging = true;
+
+            if (localFeralLungeVisual == null && arena3DRoot != null)
+            {
+                localFeralLungeVisual = CreateLocalFeralLungePovVisual(activeZombie);
+            }
+            if (localFeralLungeVisual != null && targetCamera != null)
+            {
+                float diveBob = Mathf.Sin((1f - (feralLungeTimer / Mathf.Max(0.01f, feralLungeDuration))) * Mathf.PI) * 0.14f;
+                localFeralLungeVisual.transform.position = targetCamera.transform.position
+                    + targetCamera.transform.forward * (0.64f + diveBob)
+                    - targetCamera.transform.up * 0.24f;
+                localFeralLungeVisual.transform.rotation = targetCamera.transform.rotation * Quaternion.Euler(14f, 0f, 0f);
+            }
+
+            // Check if our Feral Lunge dive connects with the Plant opponent!
+            if (!feralLungeHitDealt && remoteArenaAvatar != null)
+            {
+                Vector3 a = new Vector3(pc.transform.position.x, 0f, pc.transform.position.z);
+                Vector3 b = new Vector3(remoteArenaAvatar.transform.position.x, 0f, remoteArenaAvatar.transform.position.z);
+                float horizDist = Vector3.Distance(a, b);
+                float vertDist = Mathf.Abs(pc.transform.position.y - remoteArenaAvatar.transform.position.y);
+
+                if (horizDist <= 2.35f && vertDist <= 2.2f)
+                {
+                    feralLungeHitDealt = true;
+                    Vector3 slashCenter = targetCamera != null
+                        ? targetCamera.transform.position + targetCamera.transform.forward * 1.15f
+                        : pc.transform.position + pc.transform.forward * 1.15f;
+                    Quaternion slashRot = targetCamera != null ? targetCamera.transform.rotation : pc.transform.rotation;
+                    Spawn3DSlashEffect(slashCenter, slashRot);
+                    OnArenaAbilityFxLocal?.Invoke("SLASH", slashCenter, pc.transform.forward);
+                    DealDamageToOpponent(38, "FERAL DIVE LUNGE HIT (38 DMG)!", 0f);
+                    StopFeralLunge(pc);
+                    return;
+                }
+            }
+
+            if (feralLungeTimer <= 0f)
+            {
+                StopFeralLunge(pc);
+            }
+        }
+
+        // 3. Tick active Moonflower Charged Moon Beam
         if (isChargingMoonBeam)
         {
             moonBeamChargeTimer -= Time.deltaTime;
@@ -1122,7 +1573,6 @@ public class GridManager : MonoBehaviour
 
             if (localMoonChargeOrb != null && targetCamera != null)
             {
-                // Hover over the Moonflower's head (slightly forward so player also sees the glow above their view)
                 Vector3 orbPos = pc.transform.position + new Vector3(0f, 1.32f, 0f) + targetCamera.transform.forward * 0.42f;
                 localMoonChargeOrb.transform.position = orbPos;
                 float orbScale = Mathf.Lerp(0.18f, 0.68f, progress) + Mathf.Sin(Time.time * 18f) * 0.03f;
@@ -1142,19 +1592,19 @@ public class GridManager : MonoBehaviour
             return;
         }
 
-        // 2. Tick active Rose 0.4s Hitscan Thorn Charge
+        // 4. Tick active Rose Hitscan Thorn Charge
         if (isChargingRoseThorn)
         {
             roseThornChargeTimer -= Time.deltaTime;
             if (roseThornChargeTimer <= 0f)
             {
                 isChargingRoseThorn = false;
-                FireRoseHitscanThorn(pc);
+                FireRoseHitscanThorn(pc, isHeavyVolley: false);
             }
             return;
         }
 
-        // 3. Tick active Durian Roll Attack
+        // 5. Tick active Durian Roll Attack
         if (isDurianRollingLocal)
         {
             durianRollTimer -= Time.deltaTime;
@@ -1187,12 +1637,20 @@ public class GridManager : MonoBehaviour
 
                 if (horizDist <= 1.95f && vertDist <= 2.2f)
                 {
-                    // Connected! Immobilize and stop the Zombie player's attacks & abilities for 2 seconds!
                     StopDurianRoll(pc);
-                    arenaAbilityCooldownTimer = 1.2f;
-                    remoteImmobilizedTimer = 2.0f;
-                    OnArenaStunLocal?.Invoke(2.0f);
-                    RegisterArenaHit("DURIAN CONNECTED! ZOMBIE IMMOBILIZED (2.0s)!");
+                    arenaSecondaryCooldownTimer = 6.0f;
+                    arenaSecondaryMaxCooldown = 6.0f;
+
+                    if (remoteIsBucketParrying)
+                    {
+                        RegisterArenaParriedByOpponent(50);
+                    }
+                    else
+                    {
+                        remoteImmobilizedTimer = 2.0f;
+                        OnArenaStunLocal?.Invoke(2.0f);
+                        DealDamageToOpponent(50, "DURIAN ROLL SLAM! (50 DMG + 2s STUN)", 2.0f);
+                    }
                     return;
                 }
             }
@@ -1200,42 +1658,389 @@ public class GridManager : MonoBehaviour
             if (durianRollTimer <= 0f)
             {
                 StopDurianRoll(pc);
-                arenaAbilityCooldownTimer = 0.8f;
+                arenaSecondaryCooldownTimer = 6.0f;
+                arenaSecondaryMaxCooldown = 6.0f;
             }
             return;
         }
 
-        // 4. Trigger Attack / Special Ability on Left Click (while cursor locked) or E key
-        bool triggerPressed = (Input.GetMouseButtonDown(0) && Cursor.lockState == CursorLockMode.Locked)
-                              || Input.GetKeyDown(KeyCode.E);
-
-        if (!triggerPressed || arenaAbilityCooldownTimer > 0f)
-        {
-            return;
-        }
+        // ==================== INPUT TRIGGERS FOR PRIMARY & SECONDARY ABILITIES ====================
+        bool leftClick = Input.GetMouseButtonDown(0) && Cursor.lockState == CursorLockMode.Locked;
+        bool rightClick = Input.GetMouseButtonDown(1) && Cursor.lockState == CursorLockMode.Locked;
+        bool keyE = Input.GetKeyDown(KeyCode.E);
+        bool keyQ = Input.GetKeyDown(KeyCode.Q);
+        bool keyCtrl = Input.GetKeyDown(KeyCode.LeftControl) || Input.GetKeyDown(KeyCode.C);
 
         if (isZombie)
         {
-            PerformZombieMeleeSlash(pc);
+            if (activeZombie == ZombieType.Buckethead)
+            {
+                // Buckethead:
+                // - Right Click / E / Q: Bucket Parry (1.0s active parry window, 5.0s cooldown)
+                // - Left Click: Heavy Bucket Melee Slash (30 dmg, 1.0s cooldown)
+                if ((rightClick || keyE || keyQ) && arenaSecondaryCooldownTimer <= 0f && !isBucketParryingLocal)
+                {
+                    StartBucketheadParry(pc);
+                }
+                else if (leftClick && arenaAbilityCooldownTimer <= 0f)
+                {
+                    PerformZombieMeleeSlash(pc, damage: 30, cooldown: 1.0f, "BUCKETHEAD SLAM (30 DMG)!");
+                }
+            }
+            else if (activeZombie == ZombieType.Bunny)
+            {
+                // Bunny Zombie:
+                // - Left Click (or Q / LeftCtrl): Bunny Slide (lowers hitbox + speed boost + sliding model!)
+                // - Right Click / E (or Left Click if already sliding or slide on cooldown): Bunny Claw Slash (22 dmg, 0.65s cooldown)
+                // - F / Middle Click (or Right Click while sliding): Feral Dive Lunge!
+                bool keyF = Input.GetKeyDown(KeyCode.F) || Input.GetMouseButtonDown(2);
+                if (keyF && arenaAbilityCooldownTimer <= 0f && !isFeralLungingLocal)
+                {
+                    StartFeralLunge(pc);
+                }
+                else if ((keyQ || keyCtrl) && arenaSecondaryCooldownTimer <= 0f && !isBunnySlidingLocal)
+                {
+                    StartBunnySlide(pc);
+                }
+                else if (rightClick || keyE)
+                {
+                    if (isBunnySlidingLocal && !isFeralLungingLocal && arenaAbilityCooldownTimer <= 0f)
+                    {
+                        StopBunnySlide(pc);
+                        StartFeralLunge(pc);
+                    }
+                    else if (arenaAbilityCooldownTimer <= 0f)
+                    {
+                        PerformZombieMeleeSlash(pc, damage: 22, cooldown: 0.65f, "BUNNY CLAW SLASH (22 DMG)!");
+                    }
+                }
+                else if (leftClick)
+                {
+                    if (!isBunnySlidingLocal && arenaSecondaryCooldownTimer <= 0f)
+                    {
+                        StartBunnySlide(pc);
+                    }
+                    else if (arenaAbilityCooldownTimer <= 0f)
+                    {
+                        PerformZombieMeleeSlash(pc, damage: 22, cooldown: 0.65f, "BUNNY CLAW SLASH (22 DMG)!");
+                    }
+                }
+            }
+            else
+            {
+                // Normal Zombie:
+                // - Left Click / E: Claw Slash (25 dmg, 0.85s cooldown)
+                // - Right Click / Q: Feral Lunge Dive (38 dmg + fast forward dive with diving POV & diving model, 3.5s cooldown)
+                if ((rightClick || keyQ) && arenaSecondaryCooldownTimer <= 0f && !isFeralLungingLocal)
+                {
+                    StartFeralLunge(pc);
+                }
+                else if ((leftClick || keyE) && arenaAbilityCooldownTimer <= 0f)
+                {
+                    PerformZombieMeleeSlash(pc, damage: 25, cooldown: 0.85f, "ZOMBIE CLAW SLASH (25 DMG)!");
+                }
+            }
         }
         else
         {
+            // Plant Player Abilities & Cooldowns
             if (activePlant == PlantType.Moonflower)
             {
-                isChargingMoonBeam = true;
-                moonBeamChargeTimer = moonBeamChargeDuration;
+                // Right Click / E: Charged Moon Laser Beam (65 Dmg, 6.0s Cooldown)
+                // Left Click: Quick Solar Bolt (18 Dmg, 0.8s Cooldown)
+                if ((rightClick || keyE) && arenaSecondaryCooldownTimer <= 0f)
+                {
+                    isChargingMoonBeam = true;
+                    moonBeamChargeTimer = moonBeamChargeDuration;
+                }
+                else if (leftClick && arenaAbilityCooldownTimer <= 0f)
+                {
+                    FireMoonflowerSolarBolt(pc);
+                }
             }
             else if (activePlant == PlantType.Rose || activePlant == PlantType.Roze)
             {
-                isChargingRoseThorn = true;
-                roseThornChargeTimer = roseThornChargeDuration;
+                // Right Click / E: Heavy Piercing Thorn Volley (45 Dmg, 4.5s Cooldown)
+                // Left Click: Hitscan Thorn Shot (25 Dmg, 0.9s Cooldown)
+                if ((rightClick || keyE) && arenaSecondaryCooldownTimer <= 0f)
+                {
+                    FireRoseHitscanThorn(pc, isHeavyVolley: true);
+                }
+                else if (leftClick && arenaAbilityCooldownTimer <= 0f)
+                {
+                    isChargingRoseThorn = true;
+                    roseThornChargeTimer = roseThornChargeDuration;
+                }
             }
             else if (activePlant == PlantType.Durian)
             {
-                isDurianRollingLocal = true;
-                durianRollTimer = durianRollDuration;
-                pc.isDurianRolling = true;
-                OnArenaAbilityFxLocal?.Invoke("ROLL", pc.transform.position, pc.transform.forward);
+                // Right Click / E: Durian Roll (50 Dmg + 2s Stun, 6.0s Cooldown)
+                // Left Click: Close-Range Spike Bash (28 Dmg, 1.0s Cooldown)
+                if ((rightClick || keyE) && arenaSecondaryCooldownTimer <= 0f)
+                {
+                    isDurianRollingLocal = true;
+                    durianRollTimer = durianRollDuration;
+                    pc.isDurianRolling = true;
+                    OnArenaAbilityFxLocal?.Invoke("ROLL", pc.transform.position, pc.transform.forward);
+                }
+                else if (leftClick && arenaAbilityCooldownTimer <= 0f)
+                {
+                    PerformDurianSpikeBash(pc);
+                }
+            }
+        }
+    }
+
+    private void StartBucketheadParry(PlayerController pc)
+    {
+        isBucketParryingLocal = true;
+        bucketParryTimer = bucketParryDuration; // 1.0 second active parry window
+        arenaSecondaryCooldownTimer = bucketParryCooldown; // 5.0 seconds cooldown
+        arenaSecondaryMaxCooldown = bucketParryCooldown;
+        OnArenaAbilityFxLocal?.Invoke("PARRY_START", pc.transform.position, pc.transform.forward);
+    }
+
+    private void StartBunnySlide(PlayerController pc)
+    {
+        isBunnySlidingLocal = true;
+        bunnySlideTimer = bunnySlideDuration; // 0.90s slide
+        arenaSecondaryCooldownTimer = bunnySlideCooldown; // 3.0s cooldown
+        arenaSecondaryMaxCooldown = bunnySlideCooldown;
+        pc.isBunnySliding = true;
+        OnArenaAbilityFxLocal?.Invoke("SLIDE", pc.transform.position, pc.transform.forward);
+    }
+
+    private void StartFeralLunge(PlayerController pc)
+    {
+        isFeralLungingLocal = true;
+        feralLungeTimer = feralLungeDuration; // 0.65s high-speed forward dive
+        feralLungeHitDealt = false;
+        arenaSecondaryCooldownTimer = feralLungeCooldown; // 3.5s cooldown
+        arenaSecondaryMaxCooldown = feralLungeCooldown;
+        arenaAbilityCooldownTimer = Mathf.Max(arenaAbilityCooldownTimer, 0.55f);
+        pc.isFeralLunging = true;
+        OnArenaAbilityFxLocal?.Invoke("LUNGE", pc.transform.position, pc.transform.forward);
+    }
+
+    private GameObject CreateLocalFeralLungePovVisual(ZombieType zType)
+    {
+        GameObject root = new GameObject("LocalFeralLungePOV");
+        root.transform.SetParent(arena3DRoot.transform, true);
+
+        bool isBunny = (zType == ZombieType.Bunny);
+        Material sleeveMat = CreateColoredMaterial(isBunny ? new Color(0.14f, 0.74f, 0.78f) : new Color(0.42f, 0.16f, 0.58f));
+        Material stripeMat = CreateColoredMaterial(new Color(0.98f, 0.38f, 0.56f));
+        Material skinMat = CreateColoredMaterial(isBunny ? new Color(0.56f, 0.80f, 0.36f) : new Color(0.50f, 0.74f, 0.30f));
+        Material clawMat = CreateColoredMaterial(new Color(0.95f, 0.92f, 0.78f));
+
+        // Left & right diving zombie arms & claws lunging forward in POV toward the Plant player!
+        for (int side = -1; side <= 1; side += 2)
+        {
+            GameObject armPivot = new GameObject(side < 0 ? "LeftDivingArm" : "RightDivingArm");
+            armPivot.transform.SetParent(root.transform, false);
+            armPivot.transform.localPosition = new Vector3(side * 0.34f, -0.05f, 0.05f);
+            armPivot.transform.localRotation = Quaternion.Euler(0f, -side * 14f, -side * 12f);
+
+            GameObject sleeve = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            sleeve.transform.SetParent(armPivot.transform, false);
+            sleeve.transform.localPosition = new Vector3(0f, 0f, -0.10f);
+            sleeve.transform.localRotation = Quaternion.Euler(84f, 0f, 0f);
+            sleeve.transform.localScale = new Vector3(0.18f, 0.24f, 0.18f);
+            DestroyCollider(sleeve);
+            sleeve.GetComponent<Renderer>().sharedMaterial = sleeveMat;
+
+            if (isBunny)
+            {
+                GameObject cuff = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                cuff.transform.SetParent(armPivot.transform, false);
+                cuff.transform.localPosition = new Vector3(0f, 0f, 0.08f);
+                cuff.transform.localRotation = Quaternion.Euler(84f, 0f, 0f);
+                cuff.transform.localScale = new Vector3(0.19f, 0.05f, 0.19f);
+                DestroyCollider(cuff);
+                cuff.GetComponent<Renderer>().sharedMaterial = stripeMat;
+            }
+
+            GameObject hand = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            hand.transform.SetParent(armPivot.transform, false);
+            hand.transform.localPosition = new Vector3(0f, 0.02f, 0.24f);
+            hand.transform.localScale = new Vector3(0.20f, 0.15f, 0.24f);
+            DestroyCollider(hand);
+            hand.GetComponent<Renderer>().sharedMaterial = skinMat;
+
+            // 3 sharp lunging claws per hand
+            for (int c = -1; c <= 1; c++)
+            {
+                GameObject claw = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                claw.transform.SetParent(armPivot.transform, false);
+                claw.transform.localPosition = new Vector3(c * 0.055f, 0.01f, 0.40f);
+                claw.transform.localRotation = Quaternion.Euler(18f, c * 8f, 0f);
+                claw.transform.localScale = new Vector3(0.032f, 0.032f, 0.18f);
+                DestroyCollider(claw);
+                claw.GetComponent<Renderer>().sharedMaterial = clawMat;
+            }
+        }
+
+        return root;
+    }
+
+    private GameObject CreateLocalParryShieldVisual()
+    {
+        GameObject root = new GameObject("LocalBucketParryShield");
+        root.transform.SetParent(arena3DRoot.transform, true);
+
+        Material shieldMat = CreateColoredMaterial(new Color(0.35f, 0.92f, 1.0f));
+        Material rimMat = CreateColoredMaterial(new Color(0.85f, 0.92f, 0.98f));
+
+        // Left & right curved energy bars so player can still see crosshair clearly
+        GameObject leftArc = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        leftArc.transform.SetParent(root.transform, false);
+        leftArc.transform.localPosition = new Vector3(-0.42f, 0f, 0f);
+        leftArc.transform.localRotation = Quaternion.Euler(0f, -18f, 8f);
+        leftArc.transform.localScale = new Vector3(0.08f, 0.56f, 0.04f);
+        DestroyCollider(leftArc);
+        leftArc.GetComponent<Renderer>().sharedMaterial = shieldMat;
+
+        GameObject rightArc = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        rightArc.transform.SetParent(root.transform, false);
+        rightArc.transform.localPosition = new Vector3(0.42f, 0f, 0f);
+        rightArc.transform.localRotation = Quaternion.Euler(0f, 18f, -8f);
+        rightArc.transform.localScale = new Vector3(0.08f, 0.56f, 0.04f);
+        DestroyCollider(rightArc);
+        rightArc.GetComponent<Renderer>().sharedMaterial = shieldMat;
+
+        GameObject botRim = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        botRim.transform.SetParent(root.transform, false);
+        botRim.transform.localPosition = new Vector3(0f, -0.28f, 0f);
+        botRim.transform.localScale = new Vector3(0.76f, 0.06f, 0.04f);
+        DestroyCollider(botRim);
+        botRim.GetComponent<Renderer>().sharedMaterial = rimMat;
+
+        return root;
+    }
+
+    private GameObject CreateLocalBunnySlideLegsVisual()
+    {
+        GameObject root = new GameObject("LocalBunnySlideLegs");
+        root.transform.SetParent(arena3DRoot.transform, true);
+
+        Material pantsMat = CreateColoredMaterial(new Color(0.12f, 0.16f, 0.24f));
+        Material shoeMat = CreateColoredMaterial(new Color(1.0f, 0.42f, 0.0f));
+        Material stripeMat = CreateColoredMaterial(Color.white);
+
+        for (int side = -1; side <= 1; side += 2)
+        {
+            GameObject leg = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            leg.transform.SetParent(root.transform, false);
+            leg.transform.localPosition = new Vector3(side * 0.18f, 0f, 0.15f);
+            leg.transform.localRotation = Quaternion.Euler(82f, 0f, 0f);
+            leg.transform.localScale = new Vector3(0.18f, 0.36f, 0.18f);
+            DestroyCollider(leg);
+            leg.GetComponent<Renderer>().sharedMaterial = pantsMat;
+
+            GameObject shoe = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            shoe.transform.SetParent(root.transform, false);
+            shoe.transform.localPosition = new Vector3(side * 0.18f, 0.08f, 0.52f);
+            shoe.transform.localRotation = Quaternion.Euler(-15f, 0f, 0f);
+            shoe.transform.localScale = new Vector3(0.20f, 0.28f, 0.14f);
+            DestroyCollider(shoe);
+            shoe.GetComponent<Renderer>().sharedMaterial = shoeMat;
+
+            GameObject sole = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sole.transform.SetParent(shoe.transform, false);
+            sole.transform.localPosition = new Vector3(0f, 0f, 0.45f);
+            sole.transform.localScale = new Vector3(1.02f, 1.02f, 0.3f);
+            DestroyCollider(sole);
+            sole.GetComponent<Renderer>().sharedMaterial = stripeMat;
+        }
+
+        return root;
+    }
+
+    private void UpdateSoloArenaSparringBot(PlayerController pc, bool localIsZombie, PlantType activePlant, ZombieType activeZombie)
+    {
+        if (remoteImmobilizedTimer > 0f) return;
+
+        // Gentle strafing & facing player so solo testing feels alive
+        soloBotStrafePhase += Time.deltaTime * 1.6f;
+        Vector3 toPlayer = pc.transform.position - remoteArenaAvatar.transform.position;
+        toPlayer.y = 0f;
+        if (toPlayer.sqrMagnitude > 0.05f)
+        {
+            Quaternion lookRot = Quaternion.LookRotation(toPlayer.normalized, Vector3.up);
+            remoteArenaAvatar.transform.rotation = Quaternion.Slerp(remoteArenaAvatar.transform.rotation, lookRot, Time.deltaTime * 8f);
+        }
+
+        soloBotActionTimer -= Time.deltaTime;
+        if (soloBotActionTimer <= 0f)
+        {
+            if (localIsZombie)
+            {
+                // Remote AI is a Plant shooting at the Zombie player (great for testing Buckethead Parry & Bunny Slide!)
+                int dmg = (activePlant == PlantType.Moonflower) ? 45 : ((activePlant == PlantType.Durian) ? 35 : 25);
+                soloBotActionTimer = (activePlant == PlantType.Moonflower) ? 3.2f : 2.3f;
+
+                Vector3 start = remoteArenaAvatar.transform.position + new Vector3(0f, 0.6f, 0f);
+                Vector3 target = pc.transform.position + new Vector3(0f, isBunnySlidingLocal ? 0.45f : 0.1f, 0f);
+                Color beamCol = (activePlant == PlantType.Moonflower) ? new Color(0.25f, 0.95f, 1.0f) : new Color(1.0f, 0.20f, 0.40f);
+
+                // Check if an arena obstacle blocks the AI's laser!
+                Physics.SyncTransforms();
+                Vector3 dir = target - start;
+                float dist = dir.magnitude;
+                bool blockedByObstacle = false;
+                Vector3 beamEnd = target;
+                if (dist > 0.1f)
+                {
+                    RaycastHit[] hits = Physics.RaycastAll(start, dir.normalized, dist);
+                    float closestWall = dist;
+                    for (int i = 0; i < hits.Length; i++)
+                    {
+                        Collider c = hits[i].collider;
+                        if (c == null) continue;
+                        if (IsOpponentHitbox(c)) continue;
+                        if (c.GetComponent<PlayerController>() != null) continue;
+                        if (hits[i].distance < closestWall)
+                        {
+                            closestWall = hits[i].distance;
+                            beamEnd = hits[i].point;
+                            blockedByObstacle = true;
+                        }
+                    }
+                }
+
+                Spawn3DBeamEffect(start, beamEnd, beamCol, 0.16f, 0.30f);
+
+                if (blockedByObstacle)
+                {
+                    // Laser stopped by cover obstacle!
+                }
+                else if (isBunnySlidingLocal)
+                {
+                    arenaHitIndicatorTimer = 0.85f;
+                    arenaLastHitLabel = "💨 DODGED SHOT WITH BUNNY SLIDE! 💨";
+                }
+                else
+                {
+                    ApplyRemoteArenaDamage(dmg, 0f);
+                }
+            }
+            else
+            {
+                // Remote AI is a Zombie (if Buckethead, periodically raises Parry shield; if Bunny, periodically slides!)
+                if (activeZombie == ZombieType.Buckethead)
+                {
+                    remoteIsBucketParrying = !remoteIsBucketParrying;
+                    soloBotActionTimer = remoteIsBucketParrying ? 1.0f : 3.5f;
+                }
+                else if (activeZombie == ZombieType.Bunny)
+                {
+                    remoteIsBunnySliding = !remoteIsBunnySliding;
+                    soloBotActionTimer = remoteIsBunnySliding ? 0.9f : 2.5f;
+                }
+                else
+                {
+                    soloBotActionTimer = 2.5f;
+                }
             }
         }
     }
@@ -1252,9 +2057,37 @@ public class GridManager : MonoBehaviour
         }
     }
 
+    private void FireMoonflowerSolarBolt(PlayerController pc)
+    {
+        arenaAbilityCooldownTimer = 0.80f;
+        arenaPrimaryMaxCooldown = 0.80f;
+        if (targetCamera == null) targetCamera = Camera.main;
+        if (targetCamera == null) return;
+
+        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        Vector3 start = pc.transform.position + new Vector3(0f, 0.55f, 0f) + targetCamera.transform.forward * 0.45f;
+
+        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.35f, 60f, out Vector3 hitPoint);
+        Spawn3DBeamEffect(start, hitPoint, new Color(1.0f, 0.92f, 0.32f), 0.12f, 0.22f);
+        OnArenaAbilityFxLocal?.Invoke("BEAM", start, hitPoint);
+
+        if (hitOpponent)
+        {
+            if (remoteIsBucketParrying)
+            {
+                RegisterArenaParriedByOpponent(18);
+            }
+            else
+            {
+                DealDamageToOpponent(18, "SOLAR BOLT HIT (18 DMG)!", 0f);
+            }
+        }
+    }
+
     private void FireMoonflowerLaserBeam(PlayerController pc)
     {
-        arenaAbilityCooldownTimer = 1.0f;
+        arenaSecondaryCooldownTimer = 6.0f;
+        arenaSecondaryMaxCooldown = 6.0f;
         if (targetCamera == null) targetCamera = Camera.main;
         if (targetCamera == null) return;
 
@@ -1267,32 +2100,107 @@ public class GridManager : MonoBehaviour
 
         if (hitOpponent)
         {
-            RegisterArenaHit("MOON BEAM CONNECTED!");
+            if (remoteIsBucketParrying)
+            {
+                RegisterArenaParriedByOpponent(65);
+            }
+            else
+            {
+                DealDamageToOpponent(65, "MOON LASER BEAM HIT (65 DMG)!", 0f);
+            }
         }
     }
 
-    private void FireRoseHitscanThorn(PlayerController pc)
+    private void FireRoseHitscanThorn(PlayerController pc, bool isHeavyVolley)
     {
-        arenaAbilityCooldownTimer = 0.35f;
+        if (isHeavyVolley)
+        {
+            arenaSecondaryCooldownTimer = 4.5f;
+            arenaSecondaryMaxCooldown = 4.5f;
+        }
+        else
+        {
+            arenaAbilityCooldownTimer = 0.90f;
+            arenaPrimaryMaxCooldown = 0.90f;
+        }
+
         if (targetCamera == null) targetCamera = Camera.main;
         if (targetCamera == null) return;
 
         Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
         Vector3 shotStart = pc.transform.position + new Vector3(0f, 0.52f, 0f) + targetCamera.transform.forward * 0.45f + targetCamera.transform.right * 0.18f;
 
-        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.32f, 65f, out Vector3 hitPoint);
-        Spawn3DBeamEffect(shotStart, hitPoint, new Color(1.0f, 0.15f, 0.38f), 0.10f, 0.22f);
+        float radius = isHeavyVolley ? 0.48f : 0.32f;
+        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, radius, 65f, out Vector3 hitPoint);
+        Color col = isHeavyVolley ? new Color(1.0f, 0.08f, 0.55f) : new Color(1.0f, 0.15f, 0.38f);
+        float thick = isHeavyVolley ? 0.22f : 0.10f;
+        Spawn3DBeamEffect(shotStart, hitPoint, col, thick, 0.26f);
         OnArenaAbilityFxLocal?.Invoke("THORN", shotStart, hitPoint);
 
         if (hitOpponent)
         {
-            RegisterArenaHit("ROSE HITSCAN THORN CONNECTED!");
+            int dmg = isHeavyVolley ? 45 : 25;
+            if (remoteIsBucketParrying)
+            {
+                RegisterArenaParriedByOpponent(dmg);
+            }
+            else
+            {
+                DealDamageToOpponent(dmg, isHeavyVolley ? "THORN VOLLEY HIT (45 DMG)!" : "ROSE THORN HIT (25 DMG)!", 0f);
+            }
         }
     }
 
-    private void PerformZombieMeleeSlash(PlayerController pc)
+    private void PerformDurianSpikeBash(PlayerController pc)
     {
-        arenaAbilityCooldownTimer = 0.55f;
+        arenaAbilityCooldownTimer = 1.0f;
+        arenaPrimaryMaxCooldown = 1.0f;
+        if (targetCamera == null) targetCamera = Camera.main;
+        if (targetCamera == null) return;
+
+        Vector3 bashCenter = targetCamera.transform.position + targetCamera.transform.forward * 1.25f;
+        Spawn3DDurianSpikeBurstEffect(bashCenter, targetCamera.transform.rotation);
+        OnArenaAbilityFxLocal?.Invoke("DURIAN_BASH", bashCenter, targetCamera.transform.forward);
+
+        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.95f, 3.8f, out _);
+
+        if (!hitOpponent && remoteArenaAvatar != null)
+        {
+            Vector3 toOpp = remoteArenaAvatar.transform.position - pc.transform.position;
+            if (toOpp.magnitude <= 3.8f && Vector3.Angle(targetCamera.transform.forward, toOpp) <= 62f)
+            {
+                if (!Physics.Linecast(targetCamera.transform.position, remoteArenaAvatar.transform.position + Vector3.up * 0.5f, out RaycastHit blockHit) ||
+                    IsOpponentHitbox(blockHit.collider) ||
+                    blockHit.collider.GetComponent<PlayerController>() != null)
+                {
+                    hitOpponent = true;
+                }
+            }
+        }
+
+        if (hitOpponent)
+        {
+            if (remoteIsBucketParrying)
+            {
+                RegisterArenaParriedByOpponent(28);
+            }
+            else
+            {
+                DealDamageToOpponent(28, "DURIAN SPIKE BASH (28 DMG)!", 0f);
+            }
+        }
+    }
+
+    private void PerformNormalZombieLungeSlash(PlayerController pc)
+    {
+        StartFeralLunge(pc);
+    }
+
+    private void PerformZombieMeleeSlash(PlayerController pc, int damage = 25, float cooldown = 0.8f, string hitLabel = "ZOMBIE MELEE SLASH!")
+    {
+        arenaAbilityCooldownTimer = cooldown;
+        arenaPrimaryMaxCooldown = cooldown;
         if (targetCamera == null) targetCamera = Camera.main;
         if (targetCamera == null) return;
 
@@ -1310,23 +2218,67 @@ public class GridManager : MonoBehaviour
             float angle = Vector3.Angle(targetCamera.transform.forward, toOpp);
             if (dist <= 3.6f && angle <= 58f)
             {
-                hitOpponent = true;
+                if (!Physics.Linecast(targetCamera.transform.position, remoteArenaAvatar.transform.position + Vector3.up * 0.5f, out RaycastHit blockHit) ||
+                    IsOpponentHitbox(blockHit.collider) ||
+                    blockHit.collider.GetComponent<PlayerController>() != null)
+                {
+                    hitOpponent = true;
+                }
             }
         }
 
         if (hitOpponent)
         {
-            RegisterArenaHit("ZOMBIE MELEE SLASH CONNECTED!");
+            DealDamageToOpponent(damage, hitLabel, 0f);
         }
+    }
+
+    private void DealDamageToOpponent(int damage, string label, float stunDuration)
+    {
+        arenaHitsLanded++;
+        arenaHitIndicatorTimer = 0.95f;
+        arenaLastHitLabel = label;
+        remoteHitFlashTimer = 0.25f;
+
+        remoteArenaCurrentHP = Mathf.Max(0, remoteArenaCurrentHP - damage);
+        UpdateRemoteWorldHPBarScale();
+
+        OnArenaAttackHitLocal?.Invoke(damage, stunDuration);
+
+        if (remoteArenaCurrentHP <= 0)
+        {
+            bool localIsZombie = GetEffectiveLocalRole() == MultiplayerMenuManager.PlayerRole.Zombie;
+            ResolveArena(zombieWon: localIsZombie, notifyNetwork: true);
+        }
+    }
+
+    private void RegisterArenaParriedByOpponent(int blockedDamage)
+    {
+        float bonusPct = Mathf.Clamp(blockedDamage * 1.8f, 25f, 140f);
+        arenaHitIndicatorTimer = 1.2f;
+        arenaLastHitLabel = $"🛡 BUCKETHEAD PARRIED YOUR {blockedDamage} DMG! (+{bonusPct:F0}% ZOMBIE SPEED) 🛡";
+        OnArenaAttackHitLocal?.Invoke(blockedDamage, 0f);
+    }
+
+    private void UpdateRemoteWorldHPBarScale()
+    {
+        if (remoteHpBarFill == null) return;
+        float pct = Mathf.Clamp01((float)remoteArenaCurrentHP / Mathf.Max(1, remoteArenaMaxHP));
+        remoteHpBarFill.localScale = new Vector3(1.24f * pct, 0.12f, 1f);
+        remoteHpBarFill.localPosition = new Vector3(-0.62f * (1f - pct), 0f, -0.01f);
     }
 
     private bool CheckCursorRayHitOpponent(Ray aimRay, float sphereRadius, float maxDist, out Vector3 endPoint)
     {
+        // Ensure all newly spawned or rerolled 3D obstacle colliders are up to date in the Physics world!
+        Physics.SyncTransforms();
+
         endPoint = aimRay.GetPoint(maxDist);
         bool hitOpponent = false;
         float closestEnvDist = maxDist;
+        float closestOpponentDist = maxDist;
 
-        // First find closest environment obstacle along ray
+        // 1. First find the closest solid environment obstacle (walls, pillars, crates) along the ray
         RaycastHit[] directHits = Physics.RaycastAll(aimRay, maxDist);
         for (int i = 0; i < directHits.Length; i++)
         {
@@ -1334,19 +2286,26 @@ public class GridManager : MonoBehaviour
             if (c == null) continue;
             if (c.GetComponent<PlayerController>() != null) continue;
 
-            if (IsOpponentHitbox(c))
+            if (!IsOpponentHitbox(c))
             {
-                if (directHits[i].distance <= closestEnvDist)
+                if (directHits[i].distance < closestEnvDist)
                 {
-                    hitOpponent = true;
-                    endPoint = directHits[i].point;
                     closestEnvDist = directHits[i].distance;
+                    endPoint = directHits[i].point;
                 }
             }
-            else if (directHits[i].distance < closestEnvDist)
+        }
+
+        // 2. Check if the direct ray hit the opponent BEFORE hitting the closest obstacle wall
+        for (int i = 0; i < directHits.Length; i++)
+        {
+            Collider c = directHits[i].collider;
+            if (c == null) continue;
+            if (IsOpponentHitbox(c) && directHits[i].distance < closestEnvDist && directHits[i].distance <= closestOpponentDist)
             {
-                closestEnvDist = directHits[i].distance;
-                if (!hitOpponent) endPoint = directHits[i].point;
+                hitOpponent = true;
+                closestOpponentDist = directHits[i].distance;
+                endPoint = directHits[i].point;
             }
         }
 
@@ -1355,14 +2314,39 @@ public class GridManager : MonoBehaviour
             return true;
         }
 
-        // Also check generous spherecast along the cursor ray for the opponent's hitbox
+        // 3. Check generous spherecast up to the closest obstacle distance, and verify clear line-of-sight so lasers NEVER pierce around or through walls!
         RaycastHit[] sphereHits = Physics.SphereCastAll(aimRay, sphereRadius, closestEnvDist);
         for (int i = 0; i < sphereHits.Length; i++)
         {
-            if (IsOpponentHitbox(sphereHits[i].collider))
+            Collider c = sphereHits[i].collider;
+            if (IsOpponentHitbox(c) && sphereHits[i].distance < closestEnvDist)
             {
-                endPoint = sphereHits[i].point != Vector3.zero ? sphereHits[i].point : remoteArenaAvatar.transform.position;
-                return true;
+                Vector3 targetCheckPt = c.bounds.center;
+                Vector3 toTarget = targetCheckPt - aimRay.origin;
+                float distToTarget = toTarget.magnitude;
+
+                bool blockedByWall = false;
+                if (distToTarget > 0.05f)
+                {
+                    RaycastHit[] losHits = Physics.RaycastAll(aimRay.origin, toTarget.normalized, distToTarget);
+                    for (int j = 0; j < losHits.Length; j++)
+                    {
+                        Collider lc = losHits[j].collider;
+                        if (lc == null) continue;
+                        if (lc.GetComponent<PlayerController>() != null) continue;
+                        if (!IsOpponentHitbox(lc))
+                        {
+                            blockedByWall = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!blockedByWall)
+                {
+                    endPoint = sphereHits[i].point != Vector3.zero ? sphereHits[i].point : targetCheckPt;
+                    return true;
+                }
             }
         }
 
@@ -1377,11 +2361,7 @@ public class GridManager : MonoBehaviour
 
     private void RegisterArenaHit(string label)
     {
-        // Note: Attacks do not reduce HP for now; they count as a hit and trigger the Hit Indicator!
-        arenaHitsLanded++;
-        arenaHitIndicatorTimer = 0.95f;
-        arenaLastHitLabel = label;
-        remoteHitFlashTimer = 0.25f;
+        DealDamageToOpponent(25, label, 0f);
     }
 
     public void SpawnRemoteArenaAbilityFx(string fxType, Vector3 startPos, Vector3 endPos)
@@ -1401,6 +2381,15 @@ public class GridManager : MonoBehaviour
             Quaternion rot = endPos.sqrMagnitude > 0.001f ? Quaternion.LookRotation(endPos) : Quaternion.identity;
             Spawn3DSlashEffect(startPos, rot);
         }
+        else if (fxType == "DURIAN_BASH")
+        {
+            Quaternion rot = endPos.sqrMagnitude > 0.001f ? Quaternion.LookRotation(endPos) : Quaternion.identity;
+            Spawn3DDurianSpikeBurstEffect(startPos, rot);
+        }
+        else if (fxType == "PARRY")
+        {
+            Spawn3DBeamEffect(startPos, startPos + Vector3.up * 2.2f, new Color(0.35f, 0.95f, 1.0f), 0.55f, 0.35f);
+        }
     }
 
     private void Spawn3DBeamEffect(Vector3 start, Vector3 end, Color color, float thickness, float duration)
@@ -1419,6 +2408,59 @@ public class GridManager : MonoBehaviour
         DestroyCollider(beam);
         beam.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(color);
         Destroy(beam, duration);
+    }
+
+    private void Spawn3DDurianSpikeBurstEffect(Vector3 center, Quaternion viewRot)
+    {
+        if (arena3DRoot == null) return;
+        GameObject burstRoot = new GameObject("DurianSpikeBashFX");
+        burstRoot.transform.SetParent(arena3DRoot.transform, true);
+        burstRoot.transform.SetPositionAndRotation(center, viewRot);
+
+        Material shellMat = CreateColoredMaterial(new Color(0.68f, 0.56f, 0.16f));
+        Material spikeGoldMat = CreateColoredMaterial(new Color(0.95f, 0.84f, 0.22f));
+        Material spikeLimeMat = CreateColoredMaterial(new Color(0.55f, 0.85f, 0.24f));
+
+        // Central spiky Durian mace core
+        GameObject core = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        core.transform.SetParent(burstRoot.transform, false);
+        core.transform.localPosition = Vector3.zero;
+        core.transform.localScale = new Vector3(0.52f, 0.52f, 0.52f);
+        DestroyCollider(core);
+        core.GetComponent<Renderer>().sharedMaterial = shellMat;
+
+        // Interlocking diamond spike cages + 8 forward-thrusting golden durian thorns (distinct from Zombie claw slash!)
+        GameObject cageA = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        cageA.transform.SetParent(burstRoot.transform, false);
+        cageA.transform.localRotation = Quaternion.Euler(45f, 45f, 0f);
+        cageA.transform.localScale = new Vector3(0.46f, 0.46f, 0.46f);
+        DestroyCollider(cageA);
+        cageA.GetComponent<Renderer>().sharedMaterial = spikeGoldMat;
+
+        GameObject cageB = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        cageB.transform.SetParent(burstRoot.transform, false);
+        cageB.transform.localRotation = Quaternion.Euler(0f, 45f, 45f);
+        cageB.transform.localScale = new Vector3(0.46f, 0.46f, 0.46f);
+        DestroyCollider(cageB);
+        cageB.GetComponent<Renderer>().sharedMaterial = spikeLimeMat;
+
+        int spikeCount = 8;
+        for (int i = 0; i < spikeCount; i++)
+        {
+            float angle = i * (360f / spikeCount);
+            float rad = angle * Mathf.Deg2Rad;
+            Vector3 dir = new Vector3(Mathf.Cos(rad) * 0.65f, Mathf.Sin(rad) * 0.65f, 0.85f).normalized;
+
+            GameObject thorn = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            thorn.transform.SetParent(burstRoot.transform, false);
+            thorn.transform.localPosition = dir * 0.36f;
+            thorn.transform.localRotation = Quaternion.LookRotation(dir) * Quaternion.Euler(0f, 0f, 45f);
+            thorn.transform.localScale = new Vector3(0.11f, 0.11f, 0.52f);
+            DestroyCollider(thorn);
+            thorn.GetComponent<Renderer>().sharedMaterial = (i % 2 == 0) ? spikeGoldMat : spikeLimeMat;
+        }
+
+        Destroy(burstRoot, 0.24f);
     }
 
     private void Spawn3DSlashEffect(Vector3 center, Quaternion viewRot)
@@ -1463,6 +2505,10 @@ public class GridManager : MonoBehaviour
             Destroy(arena3DRoot);
             arena3DRoot = null;
             remoteArenaAvatar = null;
+            remoteBodyHitbox = null;
+            remoteHeadHitbox = null;
+            remoteZombieVisualRoot = null;
+            remoteParryShieldObj = null;
             remoteHpBarFill = null;
             remoteHpBarFillRenderer = null;
         }
@@ -1596,6 +2642,7 @@ public class GridManager : MonoBehaviour
         skyMoonTimer = 0f;
         passiveBrainTimer = 0f;
         for (int i = 0; i < cooldownTimers.Length; i++) cooldownTimers[i] = 0f;
+        for (int i = 0; i < zombieCooldownTimers.Length; i++) zombieCooldownTimers[i] = 0f;
         zombieCooldownTimer = 0f;
         clashingZombie = null;
         clashingPlant = null;
@@ -1706,10 +2753,11 @@ public class GridManager : MonoBehaviour
         RebuildRandomArenaLayout(currentArenaLayoutSeed);
 
         // Spawn the OTHER player's avatar (synced over the network) with accurate hitboxes.
-        // Plant player sees the Zombie; Zombie player sees the specific plant that was touched.
+        // Plant player sees the specific Zombie (Normal, Buckethead, or Bunny); Zombie player sees the specific Plant.
         MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
         bool localIsPlant = myRole == MultiplayerMenuManager.PlayerRole.Plant;
         PlantType touchedType = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+        ZombieType touchedZombieType = (clashingZombie != null) ? clashingZombie.zombieType : clashingZombieType;
 
         remoteArenaAvatar = new GameObject("Arena3D_RemotePlayer");
         remoteArenaAvatar.transform.SetParent(arena3DRoot.transform, false);
@@ -1717,14 +2765,14 @@ public class GridManager : MonoBehaviour
         remoteArenaAvatar.transform.SetPositionAndRotation(remoteSpawn, Quaternion.Euler(0f, localIsPlant ? 180f : 0f, 0f));
 
         // Primary body hitbox + upper head/blossom hitbox for each plant and zombie in the 3D 1v1 zone
-        CapsuleCollider bodyHitbox = remoteArenaAvatar.AddComponent<CapsuleCollider>();
-        bodyHitbox.height = 2.0f;
-        bodyHitbox.radius = (!localIsPlant && touchedType == PlantType.Durian) ? 0.78f : 0.58f;
-        bodyHitbox.center = Vector3.zero;
+        remoteBodyHitbox = remoteArenaAvatar.AddComponent<CapsuleCollider>();
+        remoteBodyHitbox.height = 2.0f;
+        remoteBodyHitbox.radius = (!localIsPlant && touchedType == PlantType.Durian) ? 0.78f : 0.58f;
+        remoteBodyHitbox.center = Vector3.zero;
 
-        SphereCollider headHitbox = remoteArenaAvatar.AddComponent<SphereCollider>();
-        headHitbox.radius = (!localIsPlant && touchedType == PlantType.Durian) ? 0.72f : 0.52f;
-        headHitbox.center = new Vector3(0f, 0.35f, 0f);
+        remoteHeadHitbox = remoteArenaAvatar.AddComponent<SphereCollider>();
+        remoteHeadHitbox.radius = (!localIsPlant && touchedType == PlantType.Durian) ? 0.72f : 0.52f;
+        remoteHeadHitbox.center = new Vector3(0f, 0.35f, 0f);
 
         Rigidbody rb = remoteArenaAvatar.AddComponent<Rigidbody>();
         rb.isKinematic = true;
@@ -1733,8 +2781,9 @@ public class GridManager : MonoBehaviour
         GameObject visual;
         if (localIsPlant)
         {
-            visual = Create3DZombiePlaceholder("Visual_3D_Zombie");
-            currentArenaOpponentName = "ZOMBIE PLAYER";
+            visual = Create3DZombiePlaceholder(touchedZombieType, $"Visual_3D_{touchedZombieType}");
+            currentArenaOpponentName = $"{touchedZombieType.ToString().ToUpper()} ZOMBIE";
+            remoteZombieVisualRoot = visual.transform;
 
             visual.transform.SetParent(remoteArenaAvatar.transform, false);
             visual.transform.localPosition = Vector3.zero;
@@ -1745,6 +2794,7 @@ public class GridManager : MonoBehaviour
         {
             visual = Create3DPlantPlaceholder(touchedType, $"Visual_3D_{touchedType}");
             currentArenaOpponentName = $"{touchedType.ToString().ToUpper()} PLAYER";
+            remoteZombieVisualRoot = null;
 
             visual.transform.SetParent(remoteArenaAvatar.transform, false);
             visual.transform.localPosition = Vector3.zero;
@@ -1752,7 +2802,7 @@ public class GridManager : MonoBehaviour
             visual.transform.localScale = Vector3.one;
         }
 
-        // World-space 3D HP Bar above the opponent (no text sign over their head)
+        // World-space 3D HP Bar above the opponent
         CreateRemoteWorldHPBar(remoteArenaAvatar.transform, localIsPlant);
     }
 
@@ -2041,6 +3091,9 @@ public class GridManager : MonoBehaviour
                 CreateRandomObstacleBlock($"Proc_StackTop_{i}", new Vector3(rx + 0.15f, 1.75f, rz - 0.1f), new Vector3(s * 0.72f, 0.9f, s * 0.72f), yaw + 28f, accentColor);
             }
         }
+
+        // Sync physics colliders immediately so lasers & raycasts cannot shoot through newly spawned or rerolled cover blocks!
+        Physics.SyncTransforms();
     }
 
     private void SpawnCrateCluster(string prefix, Vector3 baseLocalPos, Color primaryCol, Color secondaryCol, System.Random rng)
@@ -2170,9 +3223,42 @@ public class GridManager : MonoBehaviour
         return currentMoons >= GetPlantCost(type) && GetPlantCooldownRemaining(type) <= 0.001f;
     }
 
+    public int GetZombieCost(ZombieType type)
+    {
+        switch (type)
+        {
+            case ZombieType.Normal: return zombieCost;
+            case ZombieType.Buckethead: return bucketheadCost;
+            case ZombieType.Bunny: return bunnyCost;
+            default: return zombieCost;
+        }
+    }
+
+    public float GetZombieMaxCooldown(ZombieType type)
+    {
+        switch (type)
+        {
+            case ZombieType.Normal: return zombieCooldown;
+            case ZombieType.Buckethead: return bucketheadCooldown;
+            case ZombieType.Bunny: return bunnyCooldown;
+            default: return zombieCooldown;
+        }
+    }
+
+    public float GetZombieCooldownRemaining(ZombieType type)
+    {
+        int idx = Mathf.Clamp((int)type, 0, zombieCooldownTimers.Length - 1);
+        return zombieCooldownTimers[idx];
+    }
+
+    public bool CanAffordAndReadyZombie(ZombieType type)
+    {
+        return currentBrains >= GetZombieCost(type) && GetZombieCooldownRemaining(type) <= 0.001f;
+    }
+
     public bool CanAffordAndReadyZombie()
     {
-        return currentBrains >= zombieCost && zombieCooldownTimer <= 0.001f;
+        return CanAffordAndReadyZombie(selectedZombieType);
     }
 
     public void TrySelectPlant(PlantType type)
@@ -2199,7 +3285,7 @@ public class GridManager : MonoBehaviour
         isPlantSelected = true;
     }
 
-    public void TrySelectZombie()
+    public void TrySelectZombie(ZombieType type = ZombieType.Normal)
     {
         if (!canPlaceZombies)
         {
@@ -2208,17 +3294,18 @@ public class GridManager : MonoBehaviour
 
         isPlantSelected = false;
 
-        if (isZombieSelected)
+        if (isZombieSelected && selectedZombieType == type)
         {
             isZombieSelected = false;
             return;
         }
 
-        if (!CanAffordAndReadyZombie())
+        if (!CanAffordAndReadyZombie(type))
         {
             return;
         }
 
+        selectedZombieType = type;
         isZombieSelected = true;
     }
 
@@ -2474,9 +3561,12 @@ public class GridManager : MonoBehaviour
                 previewGhosts[i].SetActive(false);
             }
         }
-        if (zombiePreviewGhost != null && zombiePreviewGhost.activeSelf)
+        for (int i = 0; i < zombiePreviewGhosts.Length; i++)
         {
-            zombiePreviewGhost.SetActive(false);
+            if (zombiePreviewGhosts[i] != null && zombiePreviewGhosts[i].activeSelf)
+            {
+                zombiePreviewGhosts[i].SetActive(false);
+            }
         }
     }
 
@@ -2543,18 +3633,22 @@ public class GridManager : MonoBehaviour
             }
         }
 
-        if (zombiePreviewGhost != null)
-        {
-            bool showZombieGhost = isZombieSelected
-                                   && CanAffordAndReadyZombie()
-                                   && hoveredRow >= 0
-                                   && hoveredCol >= 0
-                                   && IsColumnAllowedForZombie(hoveredCol);
+        bool showZombieGhost = isZombieSelected
+                               && CanAffordAndReadyZombie(selectedZombieType)
+                               && hoveredRow >= 0
+                               && hoveredCol >= 0
+                               && IsColumnAllowedForZombie(hoveredCol);
 
-            zombiePreviewGhost.SetActive(showZombieGhost);
-            if (showZombieGhost)
+        for (int i = 0; i < zombiePreviewGhosts.Length; i++)
+        {
+            GameObject ghost = zombiePreviewGhosts[i];
+            if (ghost == null) continue;
+
+            bool active = showZombieGhost && ((int)selectedZombieType == i);
+            ghost.SetActive(active);
+            if (active)
             {
-                zombiePreviewGhost.transform.position = GetTileWorldPosition(hoveredRow, hoveredCol, -0.3f);
+                ghost.transform.position = GetTileWorldPosition(hoveredRow, hoveredCol, -0.3f);
             }
         }
     }
@@ -2584,7 +3678,15 @@ public class GridManager : MonoBehaviour
         }
         if (canPlaceZombies)
         {
-            if (brainBankRect.Contains(guiMousePos) || zombieButtonRect.Contains(guiMousePos)) return;
+            Rect actualBrainRect = canPlacePlants ? brainBankRect : new Rect(12f, 12f, 110f, 66f);
+            if (actualBrainRect.Contains(guiMousePos)) return;
+            for (int i = 0; i < zombieButtonRects.Length; i++)
+            {
+                Rect actualZombieBtn = canPlacePlants
+                    ? zombieButtonRects[i]
+                    : new Rect(126f + i * 142f, 12f, 138f, 66f);
+                if (actualZombieBtn.Contains(guiMousePos)) return;
+            }
         }
 
         if (hoveredRow < 0 || hoveredCol < 0)
@@ -2593,7 +3695,7 @@ public class GridManager : MonoBehaviour
         }
 
         // 3. Place Zombie if Zombie is selected (Only allowed on the last 2 columns on the right)
-        if (isZombieSelected && CanAffordAndReadyZombie())
+        if (isZombieSelected && CanAffordAndReadyZombie(selectedZombieType))
         {
             if (!IsColumnAllowedForZombie(hoveredCol))
             {
@@ -2601,9 +3703,11 @@ public class GridManager : MonoBehaviour
                 return;
             }
 
-            currentBrains -= zombieCost;
-            zombieCooldownTimer = zombieCooldown;
-            SpawnZombieOnTile(hoveredRow, hoveredCol, notifyNetwork: true);
+            int cost = GetZombieCost(selectedZombieType);
+            currentBrains -= cost;
+            int idx = Mathf.Clamp((int)selectedZombieType, 0, zombieCooldownTimers.Length - 1);
+            zombieCooldownTimers[idx] = GetZombieMaxCooldown(selectedZombieType);
+            SpawnZombieOnTile(hoveredRow, hoveredCol, selectedZombieType, notifyNetwork: true);
             isZombieSelected = false;
             return;
         }
@@ -2623,7 +3727,7 @@ public class GridManager : MonoBehaviour
         }
     }
 
-    public WallZombie SpawnZombieOnTile(int row, int col, bool notifyNetwork = false)
+    public WallZombie SpawnZombieOnTile(int row, int col, ZombieType type = ZombieType.Normal, bool notifyNetwork = false)
     {
         if (row < 0 || row >= rows)
         {
@@ -2633,21 +3737,26 @@ public class GridManager : MonoBehaviour
         int clampedCol = Mathf.Clamp(col, 0, columns - 1);
         Vector3 spawnPos = GetTileWorldPosition(row, clampedCol, -0.3f);
 
-        GameObject zombieObj = CreateZombieVisual($"Zombie_{row}_{clampedCol}", isGhost: false);
+        GameObject zombieObj = CreateZombieVisual(type, $"Zombie_{type}_{row}_{clampedCol}", isGhost: false);
         if (tilesContainer != null)
         {
             zombieObj.transform.SetParent(tilesContainer.transform, true);
         }
 
         WallZombie zombieComp = zombieObj.AddComponent<WallZombie>();
-        zombieComp.Initialize(this, row, spawnPos);
+        zombieComp.Initialize(this, row, spawnPos, type);
 
         if (notifyNetwork)
         {
-            OnZombiePlacedLocal?.Invoke(row, clampedCol);
+            OnZombiePlacedLocal?.Invoke(row, clampedCol, type);
         }
 
         return zombieComp;
+    }
+
+    public WallZombie SpawnZombieOnTile(int row, int col, bool notifyNetwork)
+    {
+        return SpawnZombieOnTile(row, col, ZombieType.Normal, notifyNetwork);
     }
 
     public PlaceholderPlant PlacePlantOnTile(int row, int col, PlantType type = PlantType.Moonflower, bool notifyNetwork = false)
@@ -2693,9 +3802,14 @@ public class GridManager : MonoBehaviour
         return plantComp;
     }
 
+    private GameObject CreateZombieVisual(ZombieType type, string objectName, bool isGhost)
+    {
+        return GameVisuals.CreateZombie(type, objectName, isGhost, TileWidth, TileHeight);
+    }
+
     private GameObject CreateZombieVisual(string objectName, bool isGhost)
     {
-        return GameVisuals.CreateZombie(objectName, isGhost, TileWidth, TileHeight);
+        return GameVisuals.CreateZombie(ZombieType.Normal, objectName, isGhost, TileWidth, TileHeight);
     }
 
     private GameObject CreatePlantVisual(PlantType type, string objectName, bool isGhost)
@@ -2705,13 +3819,42 @@ public class GridManager : MonoBehaviour
 
     private GameObject Create3DZombiePlaceholder(string objectName)
     {
+        return Create3DZombiePlaceholder(ZombieType.Normal, objectName);
+    }
+
+    private GameObject Create3DZombiePlaceholder(ZombieType type, string objectName)
+    {
         GameObject root = new GameObject(objectName);
 
-        Material skinMat = CreateColoredMaterial(new Color(0.50f, 0.74f, 0.30f));
+        bool isBuckethead = (type == ZombieType.Buckethead);
+        bool isBunny = (type == ZombieType.Bunny);
+
+        Material skinMat = CreateColoredMaterial(isBunny ? new Color(0.56f, 0.80f, 0.36f) : new Color(0.50f, 0.74f, 0.30f));
         Material darkSkinMat = CreateColoredMaterial(new Color(0.38f, 0.58f, 0.22f));
-        Material coatMat = CreateColoredMaterial(new Color(0.42f, 0.16f, 0.58f));
-        Material pantsMat = CreateColoredMaterial(new Color(0.20f, 0.28f, 0.38f));
-        Material shoeMat = CreateColoredMaterial(new Color(0.28f, 0.18f, 0.14f));
+
+        // Distinct clothing colors per zombie type
+        Material coatMat;
+        Material pantsMat;
+        Material shoeMat;
+        if (isBuckethead)
+        {
+            coatMat = CreateColoredMaterial(new Color(0.24f, 0.27f, 0.30f)); // Heavy charcoal work coat
+            pantsMat = CreateColoredMaterial(new Color(0.18f, 0.22f, 0.26f)); // Dark slate pants
+            shoeMat = CreateColoredMaterial(new Color(0.16f, 0.14f, 0.12f)); // Heavy work boots
+        }
+        else if (isBunny)
+        {
+            coatMat = CreateColoredMaterial(new Color(0.14f, 0.74f, 0.78f)); // Sporty bright teal tracksuit
+            pantsMat = CreateColoredMaterial(new Color(0.16f, 0.20f, 0.34f)); // Navy track pants
+            shoeMat = CreateColoredMaterial(new Color(0.98f, 0.42f, 0.14f)); // Bright orange running sneakers
+        }
+        else
+        {
+            coatMat = CreateColoredMaterial(new Color(0.42f, 0.16f, 0.58f)); // Classic purple suit
+            pantsMat = CreateColoredMaterial(new Color(0.20f, 0.28f, 0.38f));
+            shoeMat = CreateColoredMaterial(new Color(0.28f, 0.18f, 0.14f));
+        }
+
         Material tieMat = CreateColoredMaterial(new Color(0.85f, 0.18f, 0.18f));
         Material eyeWhiteMat = CreateColoredMaterial(Color.white);
         Material pupilMat = CreateColoredMaterial(new Color(0.08f, 0.10f, 0.08f));
@@ -2749,22 +3892,85 @@ public class GridManager : MonoBehaviour
         DestroyCollider(rightShoe);
         rightShoe.GetComponent<Renderer>().sharedMaterial = shoeMat;
 
-        // Torso (Purple Suit Jacket) & Red Tie
+        // Torso
         GameObject torso = GameObject.CreatePrimitive(PrimitiveType.Cube);
         torso.name = "Torso";
         torso.transform.SetParent(root.transform, false);
         torso.transform.localPosition = new Vector3(0f, -0.02f, 0f);
-        torso.transform.localScale = new Vector3(0.68f, 0.72f, 0.40f);
+        torso.transform.localScale = isBuckethead
+            ? new Vector3(0.76f, 0.75f, 0.46f)
+            : (isBunny ? new Vector3(0.62f, 0.70f, 0.36f) : new Vector3(0.68f, 0.72f, 0.40f));
         DestroyCollider(torso);
         torso.GetComponent<Renderer>().sharedMaterial = coatMat;
 
-        GameObject tie = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        tie.name = "RedTie";
-        tie.transform.SetParent(root.transform, false);
-        tie.transform.localPosition = new Vector3(0f, 0.02f, 0.21f);
-        tie.transform.localScale = new Vector3(0.12f, 0.46f, 0.04f);
-        DestroyCollider(tie);
-        tie.GetComponent<Renderer>().sharedMaterial = tieMat;
+        if (isBuckethead)
+        {
+            // Heavy Leather Work Belt + Silver Buckle
+            GameObject belt = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            belt.name = "Belt";
+            belt.transform.SetParent(root.transform, false);
+            belt.transform.localPosition = new Vector3(0f, -0.32f, 0f);
+            belt.transform.localScale = new Vector3(0.78f, 0.10f, 0.48f);
+            DestroyCollider(belt);
+            belt.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.22f, 0.14f, 0.08f));
+
+            GameObject buckle = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            buckle.name = "BeltBuckle";
+            buckle.transform.SetParent(root.transform, false);
+            buckle.transform.localPosition = new Vector3(0f, -0.32f, 0.25f);
+            buckle.transform.localScale = new Vector3(0.16f, 0.12f, 0.04f);
+            DestroyCollider(buckle);
+            buckle.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.85f, 0.78f, 0.28f));
+
+            // Yellow Mustard Shirt Collar + Red Tie
+            GameObject tie = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            tie.name = "RedTie";
+            tie.transform.SetParent(root.transform, false);
+            tie.transform.localPosition = new Vector3(0f, 0.04f, 0.24f);
+            tie.transform.localScale = new Vector3(0.13f, 0.44f, 0.04f);
+            DestroyCollider(tie);
+            tie.GetComponent<Renderer>().sharedMaterial = tieMat;
+        }
+        else if (isBunny)
+        {
+            // Coral & White Sporty Racing Stripes on Tracksuit + Fluffy White Bunny Tail on Back
+            Material coralMat = CreateColoredMaterial(new Color(0.98f, 0.38f, 0.56f));
+            Material whiteMat = CreateColoredMaterial(new Color(0.96f, 0.96f, 0.98f));
+
+            GameObject chestStripe = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            chestStripe.name = "TracksuitStripe";
+            chestStripe.transform.SetParent(root.transform, false);
+            chestStripe.transform.localPosition = new Vector3(0f, 0.04f, 0.19f);
+            chestStripe.transform.localScale = new Vector3(0.64f, 0.16f, 0.04f);
+            DestroyCollider(chestStripe);
+            chestStripe.GetComponent<Renderer>().sharedMaterial = coralMat;
+
+            GameObject zipperLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            zipperLine.name = "ZipperLine";
+            zipperLine.transform.SetParent(root.transform, false);
+            zipperLine.transform.localPosition = new Vector3(0f, -0.02f, 0.20f);
+            zipperLine.transform.localScale = new Vector3(0.06f, 0.68f, 0.04f);
+            DestroyCollider(zipperLine);
+            zipperLine.GetComponent<Renderer>().sharedMaterial = whiteMat;
+
+            GameObject bunnyTail = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            bunnyTail.name = "BunnyTail";
+            bunnyTail.transform.SetParent(root.transform, false);
+            bunnyTail.transform.localPosition = new Vector3(0f, -0.24f, -0.24f);
+            bunnyTail.transform.localScale = new Vector3(0.28f, 0.28f, 0.28f);
+            DestroyCollider(bunnyTail);
+            bunnyTail.GetComponent<Renderer>().sharedMaterial = whiteMat;
+        }
+        else
+        {
+            GameObject tie = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            tie.name = "RedTie";
+            tie.transform.SetParent(root.transform, false);
+            tie.transform.localPosition = new Vector3(0f, 0.02f, 0.21f);
+            tie.transform.localScale = new Vector3(0.12f, 0.46f, 0.04f);
+            DestroyCollider(tie);
+            tie.GetComponent<Renderer>().sharedMaterial = tieMat;
+        }
 
         // Outstretched Zombie Arms reaching forward (+Z)
         GameObject leftArm = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -2834,6 +4040,101 @@ public class GridManager : MonoBehaviour
         rightPupil.transform.localScale = new Vector3(0.06f, 0.06f, 0.05f);
         DestroyCollider(rightPupil);
         rightPupil.GetComponent<Renderer>().sharedMaterial = pupilMat;
+
+        // Headgear & Special 3D Visuals per Zombie Type
+        if (isBuckethead)
+        {
+            Material bucketSilver = CreateColoredMaterial(new Color(0.74f, 0.78f, 0.84f));
+            Material bucketDark = CreateColoredMaterial(new Color(0.48f, 0.52f, 0.58f));
+            Material paintSmudgeMat = CreateColoredMaterial(new Color(0.86f, 0.18f, 0.16f));
+
+            GameObject bucket = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            bucket.name = "MetalBucket";
+            bucket.transform.SetParent(root.transform, false);
+            bucket.transform.localPosition = new Vector3(0f, 1.00f, 0.02f);
+            bucket.transform.localRotation = Quaternion.Euler(-10f, 0f, 8f);
+            bucket.transform.localScale = new Vector3(0.70f, 0.32f, 0.70f);
+            DestroyCollider(bucket);
+            bucket.GetComponent<Renderer>().sharedMaterial = bucketSilver;
+
+            GameObject bucketRim = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            bucketRim.name = "BucketRim";
+            bucketRim.transform.SetParent(bucket.transform, false);
+            bucketRim.transform.localPosition = new Vector3(0f, -0.82f, 0f);
+            bucketRim.transform.localScale = new Vector3(1.08f, 0.14f, 1.08f);
+            DestroyCollider(bucketRim);
+            bucketRim.GetComponent<Renderer>().sharedMaterial = bucketDark;
+
+            GameObject redSplatter = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            redSplatter.name = "BucketPaintSmudge";
+            redSplatter.transform.SetParent(bucket.transform, false);
+            redSplatter.transform.localPosition = new Vector3(0.24f, 0.10f, 0.45f);
+            redSplatter.transform.localScale = new Vector3(0.28f, 0.38f, 0.12f);
+            DestroyCollider(redSplatter);
+            redSplatter.GetComponent<Renderer>().sharedMaterial = paintSmudgeMat;
+
+            // Parry Shield Aura (shown when Buckethead activates his 1s Parry stance)
+            GameObject parryShield = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            parryShield.name = "ParryShieldVisual";
+            parryShield.transform.SetParent(root.transform, false);
+            parryShield.transform.localPosition = new Vector3(0f, 0.25f, 0.45f);
+            parryShield.transform.localScale = new Vector3(1.45f, 1.65f, 0.35f);
+            DestroyCollider(parryShield);
+            parryShield.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.35f, 0.92f, 1.0f));
+            parryShield.SetActive(false);
+            remoteParryShieldObj = parryShield;
+        }
+        else if (isBunny)
+        {
+            Material earWhiteMat = CreateColoredMaterial(new Color(0.96f, 0.96f, 0.99f));
+            Material earPinkMat = CreateColoredMaterial(new Color(0.98f, 0.56f, 0.72f));
+            Material headbandMat = CreateColoredMaterial(new Color(0.98f, 0.32f, 0.50f));
+
+            // Sporty Sweatband
+            GameObject sweatband = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            sweatband.name = "BunnySweatband";
+            sweatband.transform.SetParent(root.transform, false);
+            sweatband.transform.localPosition = new Vector3(0f, 0.80f, 0.04f);
+            sweatband.transform.localScale = new Vector3(0.66f, 0.06f, 0.65f);
+            DestroyCollider(sweatband);
+            sweatband.GetComponent<Renderer>().sharedMaterial = headbandMat;
+
+            // Tall Left Bunny Ear (White Outer + Pink Inner)
+            GameObject leftEar = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            leftEar.name = "LeftBunnyEar";
+            leftEar.transform.SetParent(root.transform, false);
+            leftEar.transform.localPosition = new Vector3(-0.18f, 1.24f, 0.02f);
+            leftEar.transform.localRotation = Quaternion.Euler(-6f, 0f, 10f);
+            leftEar.transform.localScale = new Vector3(0.18f, 0.36f, 0.10f);
+            DestroyCollider(leftEar);
+            leftEar.GetComponent<Renderer>().sharedMaterial = earWhiteMat;
+
+            GameObject leftEarPink = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            leftEarPink.name = "LeftBunnyEarInner";
+            leftEarPink.transform.SetParent(leftEar.transform, false);
+            leftEarPink.transform.localPosition = new Vector3(0f, 0f, 0.32f);
+            leftEarPink.transform.localScale = new Vector3(0.58f, 0.76f, 0.55f);
+            DestroyCollider(leftEarPink);
+            leftEarPink.GetComponent<Renderer>().sharedMaterial = earPinkMat;
+
+            // Tall Right Bunny Ear (White Outer + Pink Inner)
+            GameObject rightEar = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            rightEar.name = "RightBunnyEar";
+            rightEar.transform.SetParent(root.transform, false);
+            rightEar.transform.localPosition = new Vector3(0.18f, 1.24f, 0.02f);
+            rightEar.transform.localRotation = Quaternion.Euler(8f, 0f, -12f);
+            rightEar.transform.localScale = new Vector3(0.18f, 0.36f, 0.10f);
+            DestroyCollider(rightEar);
+            rightEar.GetComponent<Renderer>().sharedMaterial = earWhiteMat;
+
+            GameObject rightEarPink = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            rightEarPink.name = "RightBunnyEarInner";
+            rightEarPink.transform.SetParent(rightEar.transform, false);
+            rightEarPink.transform.localPosition = new Vector3(0f, 0f, 0.32f);
+            rightEarPink.transform.localScale = new Vector3(0.58f, 0.76f, 0.55f);
+            DestroyCollider(rightEarPink);
+            rightEarPink.GetComponent<Renderer>().sharedMaterial = earPinkMat;
+        }
 
         return root;
     }
@@ -3165,8 +4466,10 @@ public class GridManager : MonoBehaviour
 
         // TOP-CENTER HUD: 5-MINUTE COUNTDOWN TIMER
         float sw = Screen.width;
-        // Dynamically position the Defense Timer so it NEVER overlaps the Durian button on the left or the Role banner on the right
-        float minTimerX = canPlacePlants ? (plantButtonRects[2].x + plantButtonRects[2].width + 16f) : 285f;
+        // Dynamically position the Defense Timer so it NEVER overlaps the seed buttons on the left or the Role banner on the right
+        float minTimerX = canPlacePlants
+            ? (plantButtonRects[2].x + plantButtonRects[2].width + 16f)
+            : (canPlaceZombies ? (126f + 3f * 142f + 12f) : 285f);
         float maxTimerX = sw - 245f - 210f; // 10px buffer before the compact 220px top-right role banner
         float timerX = (maxTimerX > minTimerX) ? (minTimerX + (maxTimerX - minTimerX) * 0.5f) : minTimerX;
         Rect timerRect = new Rect(timerX, 12f, 210f, 66f);
@@ -3206,18 +4509,19 @@ public class GridManager : MonoBehaviour
             DrawPlantSeedButton(2, PlantType.Durian, "Durian [3]", durianCost, new Color(0.9f, 0.78f, 0.3f));
         }
 
-        // 2. ZOMBIE PLAYER: BRAINS BANK + ZOMBIE SPAWN BUTTON (Only shown for Zombie Player or None)
+        // 2. ZOMBIE PLAYER: BRAINS BANK + 3 ZOMBIE SEED BUTTONS (Only shown for Zombie Player or None)
         if (canPlaceZombies)
         {
             // Position on the far left if Plant UI is hidden; if both are active, place on second tier
             Rect actualBrainRect = canPlacePlants ? brainBankRect : new Rect(12f, 12f, 110f, 66f);
-            Rect actualZombieRect = canPlacePlants ? zombieButtonRect : new Rect(126f, 12f, 145f, 66f);
 
             s_BankStyle.normal.textColor = new Color(0.95f, 0.55f, 1.0f);
             GUI.backgroundColor = new Color(0.24f, 0.10f, 0.28f, 0.95f);
             GUI.Box(actualBrainRect, $"BRAINS\n{currentBrains}", s_BankStyle);
 
-            DrawZombieSpawnButton(actualZombieRect);
+            DrawZombieSeedButton(0, ZombieType.Normal, "Zombie [4]", zombieCost, new Color(0.68f, 0.42f, 0.88f));
+            DrawZombieSeedButton(1, ZombieType.Buckethead, "Buckethead [5]", bucketheadCost, new Color(0.62f, 0.72f, 0.84f));
+            DrawZombieSeedButton(2, ZombieType.Bunny, "Bunny Speed [6]", bunnyCost, new Color(0.22f, 0.86f, 0.84f));
         }
 
         GUI.backgroundColor = prevBg;
@@ -3233,31 +4537,68 @@ public class GridManager : MonoBehaviour
         MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
         bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
         PlantType activePlant = (clashingPlant != null) ? clashingPlant.plantType : clashingPlantType;
+        ZombieType activeZombie = (clashingZombie != null) ? clashingZombie.zombieType : clashingZombieType;
 
-        string myTitle = isZombie ? "YOU (ZOMBIE)" : $"YOU ({activePlant.ToString().ToUpper()})";
-        string oppTitle = isZombie ? $"OPPONENT ({activePlant.ToString().ToUpper()})" : "OPPONENT (ZOMBIE)";
+        string zombieDisplayName = (activeZombie == ZombieType.Buckethead)
+            ? "BUCKETHEAD ZOMBIE"
+            : (activeZombie == ZombieType.Bunny ? "BUNNY ZOMBIE" : "NORMAL ZOMBIE");
+
+        string myTitle = isZombie ? $"YOU ({zombieDisplayName})" : $"YOU ({activePlant.ToString().ToUpper()})";
+        string oppTitle = isZombie ? $"OPPONENT ({activePlant.ToString().ToUpper()})" : $"OPPONENT ({zombieDisplayName})";
 
         string abilityHint;
+        string primaryAbilityTitle;
+        string secondaryAbilityTitle;
+
         if (isZombie)
         {
-            abilityHint = "[Left Click / E] Melee Slash Attack";
+            if (activeZombie == ZombieType.Buckethead)
+            {
+                abilityHint = "[L-Click] Heavy Slash  •  [R-Click / E / Q] Iron Bucket Parry (1s Block -> 3s Speed Boost, 5s CD)";
+                primaryAbilityTitle = "Heavy Slash [LMB]\n30 DMG";
+                secondaryAbilityTitle = isBucketParryingLocal
+                    ? $"PARRY ACTIVE!\n{bucketParryTimer:F1}s"
+                    : "Bucket Parry [RMB/E]";
+            }
+            else if (activeZombie == ZombieType.Bunny)
+            {
+                abilityHint = "[L-Click / Q / Ctrl] Bunny Slide  •  [R-Click / E] Quick Slash  •  [F / Slide+RMB] Feral Dive Lunge";
+                primaryAbilityTitle = "Bunny Claw [RMB/E]\n22 DMG";
+                secondaryAbilityTitle = isBunnySlidingLocal
+                    ? $"SLIDING!\n{bunnySlideTimer:F1}s"
+                    : "Bunny Slide [LMB/Q]";
+            }
+            else
+            {
+                abilityHint = "[L-Click / E] Claw Slash  •  [R-Click / Q] Feral Dive Lunge (Fast Pounce)";
+                primaryAbilityTitle = "Claw Slash [LMB/E]\n25 DMG";
+                secondaryAbilityTitle = isFeralLungingLocal
+                    ? $"DIVING!\n{feralLungeTimer:F1}s"
+                    : "Feral Lunge [RMB/Q]\n38 DMG";
+            }
         }
         else if (activePlant == PlantType.Moonflower)
         {
-            abilityHint = "[Left Click / E] Moon Beam (2.0s Charge Over Head -> Laser at Cursor)";
+            abilityHint = "[L-Click] Solar Bolt (18 DMG)  •  [R-Click / E] Charged Moon Beam (65 DMG Laser)";
+            primaryAbilityTitle = "Solar Bolt [LMB]\n18 DMG";
+            secondaryAbilityTitle = "Moon Beam [RMB/E]\n65 DMG";
         }
         else if (activePlant == PlantType.Rose || activePlant == PlantType.Roze)
         {
-            abilityHint = "[Left Click / E] Hitscan Thorn Shot (0.4s Charge)";
+            abilityHint = "[L-Click] Hitscan Thorn (25 DMG)  •  [R-Click / E] Heavy Thorn Volley (45 DMG)";
+            primaryAbilityTitle = "Thorn Shot [LMB]\n25 DMG";
+            secondaryAbilityTitle = "Thorn Volley [RMB/E]\n45 DMG";
         }
         else
         {
-            abilityHint = "[Left Click / E] Durian Roll (Lowers FOV, Harder Turn, 2.0s Zombie Immobilize on Hit)";
+            abilityHint = "[L-Click] Spike Bash (28 DMG)  •  [R-Click / E] Durian Roll (50 DMG + 2.0s Stun)";
+            primaryAbilityTitle = "Spike Bash [LMB]\n28 DMG";
+            secondaryAbilityTitle = "Durian Roll [RMB/E]\n50 DMG + Stun";
         }
 
         // 1. Top-Center Instructions Banner
         GUI.backgroundColor = new Color(0.10f, 0.14f, 0.22f, 0.88f);
-        GUI.Box(new Rect(cx - 325f, 12f, 650f, 54f),
+        GUI.Box(new Rect(cx - 360f, 12f, 720f, 54f),
             $"3D 1v1 ARENA ({currentArenaPresetName}) • {abilityHint}\nWASD: Move | Space: Jump | R: Reroll Layout | Hits: {arenaHitsLanded} | Host: N/M = Win",
             s_ArenaHudStyle);
 
@@ -3269,8 +4610,8 @@ public class GridManager : MonoBehaviour
             oppBarCol = new Color(1.0f, 0.95f, 0.35f);
         }
 
-        DrawArenaHPBar(new Rect(18f, 14f, 240f, 48f), myTitle, localArenaCurrentHP, localArenaMaxHP, myBarCol);
-        DrawArenaHPBar(new Rect(sw - 258f, 14f, 240f, 48f), oppTitle, remoteArenaCurrentHP, remoteArenaMaxHP, oppBarCol);
+        DrawArenaHPBar(new Rect(18f, 14f, 255f, 48f), myTitle, localArenaCurrentHP, localArenaMaxHP, myBarCol);
+        DrawArenaHPBar(new Rect(sw - 273f, 14f, 255f, 48f), oppTitle, remoteArenaCurrentHP, remoteArenaMaxHP, oppBarCol);
 
         // 3. Center Cursor (Crosshair) in the exact middle of the screen
         Color prevColor = GUI.color;
@@ -3304,12 +4645,13 @@ public class GridManager : MonoBehaviour
 
             GUI.color = prevColor;
             GUI.backgroundColor = new Color(0.35f, 0.06f, 0.06f, 0.92f);
-            GUI.Box(new Rect(cx - 190f, cy + 26f, 380f, 32f),
+            GUI.Box(new Rect(cx - 210f, cy + 26f, 420f, 32f),
                 $"★ {arenaLastHitLabel} (Hits: {arenaHitsLanded}) ★", s_HitStyle);
         }
         GUI.color = prevColor;
 
-        // 5. Ability Charge / Roll Progress Bar below the Center Cursor
+        // 5. Ability Charge / Roll / Parry / Slide Progress Bar below the Center Cursor
+        PlayerController pc = GetPrimaryPlayerController();
         if (isChargingMoonBeam)
         {
             float pct = 1.0f - Mathf.Clamp01(moonBeamChargeTimer / Mathf.Max(0.01f, moonBeamChargeDuration));
@@ -3325,9 +4667,47 @@ public class GridManager : MonoBehaviour
             float pct = Mathf.Clamp01(durianRollTimer / Mathf.Max(0.01f, durianRollDuration));
             DrawCenterChargeBar(cx, cy - 36f, pct, "DURIAN ROLLING! (RAM ZOMBIE TO IMMOBILIZE)", new Color(0.95f, 0.80f, 0.25f));
         }
+        else if (isBucketParryingLocal)
+        {
+            float pct = Mathf.Clamp01(bucketParryTimer / Mathf.Max(0.01f, bucketParryDuration));
+            DrawCenterChargeBar(cx, cy - 36f, pct, $"🛡️ IRON BUCKET PARRY ACTIVE ({bucketParryTimer:F1}s) 🛡️", new Color(0.35f, 0.95f, 1.0f));
+        }
+        else if (isBunnySlidingLocal)
+        {
+            float pct = Mathf.Clamp01(bunnySlideTimer / Mathf.Max(0.01f, bunnySlideDuration));
+            DrawCenterChargeBar(cx, cy - 36f, pct, $"🐇 BUNNY SLIDING! LOW HITBOX + 1.48x SPEED ({bunnySlideTimer:F1}s)", new Color(0.25f, 0.95f, 0.88f));
+        }
+        else if (isFeralLungingLocal)
+        {
+            float pct = Mathf.Clamp01(feralLungeTimer / Mathf.Max(0.01f, feralLungeDuration));
+            DrawCenterChargeBar(cx, cy - 36f, pct, $"🧟 FERAL DIVE LUNGE! POUNCING AT PLANT ({feralLungeTimer:F1}s)", new Color(0.92f, 0.35f, 1.0f));
+        }
 
-        // 6. Immobilized Banner if Zombie Player was hit by Durian Roll
-        PlayerController pc = GetPrimaryPlayerController();
+        // Show Buckethead Parry Speed Boost active timer
+        if (pc != null && pc.parrySpeedBonusTimer > 0f)
+        {
+            float pct = Mathf.Clamp01(pc.parrySpeedBonusTimer / Mathf.Max(0.01f, bucketParrySpeedDuration));
+            int bonusPct = Mathf.RoundToInt((pc.parrySpeedBonusMultiplier - 1.0f) * 100f);
+            DrawCenterChargeBar(cx, cy - 62f, pct, $"⚡ PARRY SPEED BOOST +{bonusPct}% ({pc.parrySpeedBonusTimer:F1}s) ⚡", new Color(1.0f, 0.85f, 0.25f));
+        }
+
+        // 6. Bottom-Center Ability Cooldown Boxes (Primary & Secondary Abilities)
+        DrawArenaAbilityCooldownBox(
+            new Rect(cx - 178f, sh - 78f, 170f, 60f),
+            primaryAbilityTitle,
+            arenaAbilityCooldownTimer,
+            arenaPrimaryMaxCooldown,
+            new Color(0.22f, 0.72f, 0.95f)
+        );
+        DrawArenaAbilityCooldownBox(
+            new Rect(cx + 8f, sh - 78f, 170f, 60f),
+            secondaryAbilityTitle,
+            arenaSecondaryCooldownTimer,
+            arenaSecondaryMaxCooldown,
+            new Color(0.88f, 0.48f, 0.98f)
+        );
+
+        // 7. Immobilized Banner if Zombie Player was hit by Durian Roll
         if (pc != null && pc.IsImmobilized)
         {
             GUI.backgroundColor = new Color(0.28f, 0.08f, 0.05f, 0.94f);
@@ -3341,7 +4721,7 @@ public class GridManager : MonoBehaviour
                 $"ZOMBIE IMMOBILIZED & UNABLE TO ATTACK ({remoteImmobilizedTimer:F1}s)", s_OppStunStyle);
         }
 
-        // 7. Arena Resolution Banner (N / M)
+        // 8. Arena Resolution Banner (N / M or 0 HP)
         if (arenaResolving)
         {
             s_WinStyle.normal.textColor = arenaZombieWon ? new Color(0.8f, 0.45f, 1f) : new Color(0.5f, 1f, 0.45f);
@@ -3350,6 +4730,29 @@ public class GridManager : MonoBehaviour
             float w = 560f * pulse, h = 130f * pulse;
             GUI.Box(new Rect(cx - w * 0.5f, cy - h * 0.5f, w, h),
                 arenaZombieWon ? "ZOMBIE WON!" : "PLANT WON!", s_WinStyle);
+        }
+
+        GUI.backgroundColor = prevBg;
+    }
+
+    private void DrawArenaAbilityCooldownBox(Rect rect, string title, float cdRemaining, float cdMax, Color readyTint)
+    {
+        Color prevBg = GUI.backgroundColor;
+        Color prevColor = GUI.color;
+
+        bool isReady = cdRemaining <= 0.005f;
+        GUI.backgroundColor = isReady ? readyTint : new Color(0.25f, 0.25f, 0.28f, 0.95f);
+
+        string status = isReady ? "READY" : $"CD: {cdRemaining:F1}s";
+        GUI.Box(rect, $"{title}\n{status}", s_PlantBtnStyle);
+
+        // PvZ-style vertical recharge curtain sweep
+        if (!isReady && cdMax > 0.01f)
+        {
+            float ratio = Mathf.Clamp01(cdRemaining / cdMax);
+            GUI.color = new Color(0.02f, 0.02f, 0.05f, 0.65f);
+            GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, rect.height * ratio), Texture2D.whiteTexture);
+            GUI.color = prevColor;
         }
 
         GUI.backgroundColor = prevBg;
@@ -3373,7 +4776,7 @@ public class GridManager : MonoBehaviour
     private void DrawCenterChargeBar(float cx, float y, float pct, string text, Color fillCol)
     {
         Color prevColor = GUI.color;
-        Rect bgRect = new Rect(cx - 110f, y, 220f, 20f);
+        Rect bgRect = new Rect(cx - 140f, y, 280f, 20f);
         GUI.color = new Color(0.06f, 0.08f, 0.12f, 0.92f);
         GUI.DrawTexture(bgRect, Texture2D.whiteTexture);
 
@@ -3389,11 +4792,10 @@ public class GridManager : MonoBehaviour
     {
         Rect rect = plantButtonRects[index];
         float cd = GetPlantCooldownRemaining(type);
+        float maxCd = GetPlantMaxCooldown(type);
         bool enoughMoons = currentMoons >= cost;
         bool isReady = cd <= 0.001f && enoughMoons;
         bool isSelected = isPlantSelected && selectedPlantType == type;
-
-// cached style used below
 
         if (isSelected)
         {
@@ -3411,7 +4813,7 @@ public class GridManager : MonoBehaviour
         string statusLine;
         if (cd > 0.001f)
         {
-            statusLine = $"CD: {cd:F1}s";
+            statusLine = $"RECHARGING {cd:F1}s";
         }
         else if (!enoughMoons)
         {
@@ -3431,22 +4833,37 @@ public class GridManager : MonoBehaviour
         {
             TrySelectPlant(type);
         }
+
+        // PvZ-style vertical dark recharge overlay curtain sweeping top-to-bottom as cooldown recharges
+        if (cd > 0.001f && maxCd > 0.01f)
+        {
+            Color prevCol = GUI.color;
+            float cdRatio = Mathf.Clamp01(cd / maxCd);
+            GUI.color = new Color(0.02f, 0.02f, 0.05f, 0.62f);
+            GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, rect.height * cdRatio), Texture2D.whiteTexture);
+            GUI.color = prevCol;
+        }
     }
 
-    private void DrawZombieSpawnButton(Rect targetRect)
+    private void DrawZombieSeedButton(int index, ZombieType type, string title, int cost, Color readyTint)
     {
-        bool enoughBrains = currentBrains >= zombieCost;
-        bool isReady = zombieCooldownTimer <= 0.001f && enoughBrains;
+        Rect targetRect = canPlacePlants
+            ? zombieButtonRects[index]
+            : new Rect(126f + index * 142f, 12f, 138f, 66f);
 
-// cached style used below
+        float cd = GetZombieCooldownRemaining(type);
+        float maxCd = GetZombieMaxCooldown(type);
+        bool enoughBrains = currentBrains >= cost;
+        bool isReady = cd <= 0.001f && enoughBrains;
+        bool isSelected = isZombieSelected && selectedZombieType == type;
 
-        if (isZombieSelected)
+        if (isSelected)
         {
             GUI.backgroundColor = new Color(0.85f, 0.3f, 1.0f);
         }
         else if (isReady)
         {
-            GUI.backgroundColor = new Color(0.68f, 0.42f, 0.88f);
+            GUI.backgroundColor = readyTint;
         }
         else
         {
@@ -3454,15 +4871,15 @@ public class GridManager : MonoBehaviour
         }
 
         string statusLine;
-        if (zombieCooldownTimer > 0.001f)
+        if (cd > 0.001f)
         {
-            statusLine = $"CD: {zombieCooldownTimer:F1}s";
+            statusLine = $"RECHARGING {cd:F1}s";
         }
         else if (!enoughBrains)
         {
-            statusLine = $"Need {zombieCost} 🧠";
+            statusLine = $"Need {cost} 🧠";
         }
-        else if (isZombieSelected)
+        else if (isSelected)
         {
             statusLine = "SELECTED ✓";
         }
@@ -3471,10 +4888,20 @@ public class GridManager : MonoBehaviour
             statusLine = "READY";
         }
 
-        string label = $"Zombie [4]\n{zombieCost} 🧠 • {statusLine}";
+        string label = $"{title}\n{cost} 🧠 • {statusLine}";
         if (GUI.Button(targetRect, label, s_ZombieBtnStyle))
         {
-            TrySelectZombie();
+            TrySelectZombie(type);
+        }
+
+        // PvZ-style vertical dark recharge overlay curtain sweeping top-to-bottom as cooldown recharges
+        if (cd > 0.001f && maxCd > 0.01f)
+        {
+            Color prevCol = GUI.color;
+            float cdRatio = Mathf.Clamp01(cd / maxCd);
+            GUI.color = new Color(0.02f, 0.02f, 0.05f, 0.62f);
+            GUI.DrawTexture(new Rect(targetRect.x, targetRect.y, targetRect.width, targetRect.height * cdRatio), Texture2D.whiteTexture);
+            GUI.color = prevCol;
         }
     }
 
