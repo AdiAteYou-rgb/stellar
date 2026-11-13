@@ -1797,6 +1797,23 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
 
         s_SearchedSophieFont = true;
+
+        // Ensure the font file isn't an unpulled Git LFS pointer text file (~130 bytes)
+        try
+        {
+            string fontPath = System.IO.Path.Combine(Application.dataPath, "Font", "Sophiecomic-Regular.ttf");
+            if (System.IO.File.Exists(fontPath))
+            {
+                var fi = new System.IO.FileInfo(fontPath);
+                if (fi.Length < 1000)
+                {
+                    Debug.LogWarning("[MultiplayerMenuManager] Sophiecomic-Regular.ttf is an unpulled Git LFS pointer file. Falling back to default font.");
+                    return null;
+                }
+            }
+        }
+        catch { }
+
         Font[] fonts = Resources.FindObjectsOfTypeAll<Font>();
         foreach (Font font in fonts)
         {
