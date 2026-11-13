@@ -87,7 +87,10 @@ public class MultiplayerMenuManager : MonoBehaviour
     [Header("Menu Polish & UI")]
     public bool showHowToPlayModal = false;
     [SerializeField] private Font menuFont;
+    private static Font s_CachedSophieFont;
+    private static bool s_SearchedSophieFont = false;
     private float codeCopiedTimer = 0f;
+    private bool gridEventsSubscribed = false;
 
     private void Awake()
     {
@@ -111,23 +114,11 @@ public class MultiplayerMenuManager : MonoBehaviour
         if (Application.isPlaying)
         {
             currentState = MenuState.MainMenu;
+            EnsureGridEventsSubscribed();
             if (gameplayWallGrid != null)
             {
                 gameplayWallGrid.lockCameraToThisWall = false;
                 gameplayWallGrid.gameplayActive = false;
-                gameplayWallGrid.OnPlantPlacedLocal += HandleLocalPlantPlaced;
-                gameplayWallGrid.OnZombiePlacedLocal += HandleLocalZombiePlaced;
-                gameplayWallGrid.OnMatchEndedLocal += HandleLocalMatchEnded;
-                gameplayWallGrid.OnMatchRestartedLocal += HandleLocalMatchRestarted;
-                gameplayWallGrid.OnSkyMoonSpawnedLocal += HandleSkyMoonSpawned;
-                gameplayWallGrid.OnFlowerMoonSpawnedLocal += HandleFlowerMoonSpawned;
-                gameplayWallGrid.OnMoonsCollectedLocal += HandleMoonsCollected;
-                gameplayWallGrid.OnClashStartedLocal += HandleClashStarted;
-                gameplayWallGrid.OnArenaPoseLocal += HandleArenaPose;
-                gameplayWallGrid.OnArenaResolvedLocal += HandleArenaResolved;
-                gameplayWallGrid.OnArenaStunLocal += HandleArenaStun;
-                gameplayWallGrid.OnArenaAbilityFxLocal += HandleArenaAbilityFx;
-                gameplayWallGrid.OnArenaSeedLocal += HandleArenaSeed;
             }
             SnapCameraToMenuWall();
         }
@@ -138,6 +129,7 @@ public class MultiplayerMenuManager : MonoBehaviour
         if (Application.isPlaying)
         {
             currentState = MenuState.MainMenu;
+            EnsureGridEventsSubscribed();
             if (gameplayWallGrid != null)
             {
                 gameplayWallGrid.lockCameraToThisWall = false;
@@ -145,6 +137,47 @@ public class MultiplayerMenuManager : MonoBehaviour
             }
             SnapCameraToMenuWall();
         }
+    }
+
+    private void EnsureGridEventsSubscribed()
+    {
+        if (gameplayWallGrid == null)
+        {
+            gameplayWallGrid = FindFirstObjectByType<GridManager>();
+        }
+        if (gameplayWallGrid == null || gridEventsSubscribed)
+        {
+            return;
+        }
+
+        gameplayWallGrid.OnPlantPlacedLocal -= HandleLocalPlantPlaced;
+        gameplayWallGrid.OnZombiePlacedLocal -= HandleLocalZombiePlaced;
+        gameplayWallGrid.OnMatchEndedLocal -= HandleLocalMatchEnded;
+        gameplayWallGrid.OnMatchRestartedLocal -= HandleLocalMatchRestarted;
+        gameplayWallGrid.OnSkyMoonSpawnedLocal -= HandleSkyMoonSpawned;
+        gameplayWallGrid.OnFlowerMoonSpawnedLocal -= HandleFlowerMoonSpawned;
+        gameplayWallGrid.OnMoonsCollectedLocal -= HandleMoonsCollected;
+        gameplayWallGrid.OnClashStartedLocal -= HandleClashStarted;
+        gameplayWallGrid.OnArenaPoseLocal -= HandleArenaPose;
+        gameplayWallGrid.OnArenaResolvedLocal -= HandleArenaResolved;
+        gameplayWallGrid.OnArenaStunLocal -= HandleArenaStun;
+        gameplayWallGrid.OnArenaAbilityFxLocal -= HandleArenaAbilityFx;
+        gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
+
+        gameplayWallGrid.OnPlantPlacedLocal += HandleLocalPlantPlaced;
+        gameplayWallGrid.OnZombiePlacedLocal += HandleLocalZombiePlaced;
+        gameplayWallGrid.OnMatchEndedLocal += HandleLocalMatchEnded;
+        gameplayWallGrid.OnMatchRestartedLocal += HandleLocalMatchRestarted;
+        gameplayWallGrid.OnSkyMoonSpawnedLocal += HandleSkyMoonSpawned;
+        gameplayWallGrid.OnFlowerMoonSpawnedLocal += HandleFlowerMoonSpawned;
+        gameplayWallGrid.OnMoonsCollectedLocal += HandleMoonsCollected;
+        gameplayWallGrid.OnClashStartedLocal += HandleClashStarted;
+        gameplayWallGrid.OnArenaPoseLocal += HandleArenaPose;
+        gameplayWallGrid.OnArenaResolvedLocal += HandleArenaResolved;
+        gameplayWallGrid.OnArenaStunLocal += HandleArenaStun;
+        gameplayWallGrid.OnArenaAbilityFxLocal += HandleArenaAbilityFx;
+        gameplayWallGrid.OnArenaSeedLocal += HandleArenaSeed;
+        gridEventsSubscribed = true;
     }
 
     private void OnDestroy()
@@ -165,6 +198,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             gameplayWallGrid.OnArenaAbilityFxLocal -= HandleArenaAbilityFx;
             gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
         }
+        gridEventsSubscribed = false;
         StopNetwork();
     }
 
@@ -325,29 +359,10 @@ public class MultiplayerMenuManager : MonoBehaviour
             return;
         }
 
-        // 1. Queue outgoing messages into driver before ScheduleUpdate flushes pipelines & socket
-        if (relayConnection != default &&
-            relayDriver.GetConnectionState(relayConnection) == NetworkConnection.State.Connected)
-        {
-            while (outgoingRelayMessages.TryDequeue(out string outMsg))
-            {
-                if (string.IsNullOrEmpty(outMsg)) continue;
-
-                NetworkPipeline pipe = outMsg.StartsWith("APOSE:") ? NetworkPipeline.Null : relayReliablePipeline;
-                int res = relayDriver.BeginSend(pipe, relayConnection, out DataStreamWriter writer);
-                if (res == 0)
-                {
-                    FixedString512Bytes fs = new FixedString512Bytes(outMsg);
-                    writer.WriteFixedString512(fs);
-                    relayDriver.EndSend(writer);
-                }
-            }
-        }
-
-        // 2. Complete driver update tick
+        // 1. Complete driver update tick first so connections, acks, and pipeline buffers are up to date
         relayDriver.ScheduleUpdate().Complete();
 
-        // 3. Accept incoming connections (Host) before popping events
+        // 2. Accept incoming connections (Host) before popping events
         if (isHost && relayDriver.Listening)
         {
             NetworkConnection incoming;
@@ -358,7 +373,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             }
         }
 
-        // 4. Pop all connection & data events
+        // 3. Pop all connection & data events
         NetworkEvent.Type cmd;
         while ((cmd = relayDriver.PopEvent(out NetworkConnection conn, out DataStreamReader stream)) != NetworkEvent.Type.Empty)
         {
@@ -401,6 +416,41 @@ public class MultiplayerMenuManager : MonoBehaviour
                 if (!isHost && currentState == MenuState.JoiningEnterCode)
                 {
                     incomingMessages.Enqueue("ERROR:Relay connection closed or timed out. Check the code and try again!");
+                }
+            }
+        }
+
+        // 4. Send queued outgoing messages after events are processed (if reliability window is momentarily full, keep in queue)
+        if (relayConnection != default &&
+            relayDriver.GetConnectionState(relayConnection) == NetworkConnection.State.Connected)
+        {
+            int maxPerFrame = 64;
+            while (maxPerFrame-- > 0 && outgoingRelayMessages.TryPeek(out string outMsg))
+            {
+                if (string.IsNullOrEmpty(outMsg))
+                {
+                    outgoingRelayMessages.TryDequeue(out _);
+                    continue;
+                }
+
+                NetworkPipeline pipe = outMsg.StartsWith("APOSE:") ? NetworkPipeline.Null : relayReliablePipeline;
+                int res = relayDriver.BeginSend(pipe, relayConnection, out DataStreamWriter writer);
+                if (res == 0)
+                {
+                    outgoingRelayMessages.TryDequeue(out _);
+                    FixedString512Bytes fs = new FixedString512Bytes(outMsg);
+                    writer.WriteFixedString512(fs);
+                    relayDriver.EndSend(writer);
+                }
+                else if (pipe == NetworkPipeline.Null)
+                {
+                    // Drop stale unreliable pose if buffer is busy
+                    outgoingRelayMessages.TryDequeue(out _);
+                }
+                else
+                {
+                    // Reliable pipeline window full; retry next frame without losing the message!
+                    break;
                 }
             }
         }
@@ -834,7 +884,13 @@ public class MultiplayerMenuManager : MonoBehaviour
                     if (gameplayWallGrid != null) gameplayWallGrid.SetLocalRole(PlayerRole.Zombie);
                 }
 
-                gameplayWallGrid.TriggerRemoteClash(r, c, pType, remoteRole);
+                // Ensure we are in Gameplay state so camera isn't pulled back to menu/transport target
+                currentState = MenuState.Gameplay;
+                if (gameplayWallGrid != null)
+                {
+                    gameplayWallGrid.gameplayActive = true;
+                    gameplayWallGrid.TriggerRemoteClash(r, c, pType, remoteRole);
+                }
             }
             else if (msg.StartsWith("APOSE:"))
             {
@@ -923,6 +979,7 @@ public class MultiplayerMenuManager : MonoBehaviour
 
     public void BeginTransportToGameplayWall()
     {
+        EnsureGridEventsSubscribed();
         statusMessage = "Connected! Transporting to the Gameplay Wall...";
         if (gameplayWallGrid != null)
         {
@@ -963,6 +1020,7 @@ public class MultiplayerMenuManager : MonoBehaviour
 
     private void ApplyRoleAssignment(PlayerRole hRole, PlayerRole jRole)
     {
+        EnsureGridEventsSubscribed();
         hostRole = hRole;
         joinerRole = jRole;
         localRole = isHost ? hostRole : joinerRole;
@@ -1676,12 +1734,19 @@ public class MultiplayerMenuManager : MonoBehaviour
 
     private static Font FindSophiecomicFont()
     {
+        if (s_SearchedSophieFont)
+        {
+            return s_CachedSophieFont;
+        }
+
+        s_SearchedSophieFont = true;
         Font[] fonts = Resources.FindObjectsOfTypeAll<Font>();
         foreach (Font font in fonts)
         {
             if (font != null && font.name.Contains("Sophiecomic"))
             {
-                return font;
+                s_CachedSophieFont = font;
+                return s_CachedSophieFont;
             }
         }
 

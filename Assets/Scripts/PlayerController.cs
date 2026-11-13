@@ -43,6 +43,7 @@ public class PlayerController : MonoBehaviour
 
     private float cameraPitch = 0f;
     private float currentRollTilt = 0f;
+    private GridManager cachedGridManager;
 
     private void Start()
     {
@@ -126,8 +127,11 @@ public class PlayerController : MonoBehaviour
     private void Update()
     {
         // Only process 3D player movement when in the 3D 1v1 Arena (or if no GridManager is active)
-        GridManager grid = FindFirstObjectByType<GridManager>();
-        if (grid != null && !isFirstPersonArenaActive)
+        if (cachedGridManager == null)
+        {
+            cachedGridManager = FindFirstObjectByType<GridManager>();
+        }
+        if (cachedGridManager != null && !isFirstPersonArenaActive)
         {
             return;
         }

@@ -180,7 +180,16 @@ public class GridManager : MonoBehaviour
 
     private int hoveredRow = -1;
     private int hoveredCol = -1;
+    private int prevHoveredRow = -1;
+    private int prevHoveredCol = -1;
+    private bool prevIsZombieSelected = false;
+    private bool prevHoveredOccupied = false;
     private Material sharedBaseMaterial;
+    private readonly System.Collections.Generic.Dictionary<Color32, Material> cachedMaterials = new System.Collections.Generic.Dictionary<Color32, Material>();
+    private MultiplayerMenuManager cachedMenuManager;
+    private PlayerController cachedPlayerController;
+    private float clashRetrySendTimer = 0f;
+    private bool localInitiatedCurrentClash = false;
 
     // Top-left UI layout rects (Moon Bank + 3 Plant Buttons + Brain Bank + Zombie Button)
     private readonly Rect moonBankRect = new Rect(12f, 12f, 110f, 66f);
@@ -328,10 +337,13 @@ public class GridManager : MonoBehaviour
                 );
 
                 Renderer rend = tileQuad.GetComponent<Renderer>();
-                rend.material = CreateColoredMaterial(GetBaseTileColor(r, c));
+                rend.sharedMaterial = CreateColoredMaterial(GetBaseTileColor(r, c));
                 tileRenderers[r, c] = rend;
             }
         }
+
+        prevHoveredRow = -1;
+        prevHoveredCol = -1;
 
         // Visual Defense Line marker on the board's left boundary
         Transform existingLine = transform.Find("DefenseLineMarker");
@@ -439,7 +451,7 @@ public class GridManager : MonoBehaviour
             {
                 UpdateArenaCombat();
 
-                MultiplayerMenuManager menu = FindFirstObjectByType<MultiplayerMenuManager>();
+                MultiplayerMenuManager menu = GetMenuManager();
                 bool isHostOrSolo = menu == null || menu.isHost || menu.localRole == MultiplayerMenuManager.PlayerRole.None;
                 if (isHostOrSolo)
                 {
@@ -615,6 +627,15 @@ public class GridManager : MonoBehaviour
     private int clashingPlantCol = -1;
     private PlantType clashingPlantType = PlantType.Rose;
 
+    private MultiplayerMenuManager GetMenuManager()
+    {
+        if (cachedMenuManager == null)
+        {
+            cachedMenuManager = FindFirstObjectByType<MultiplayerMenuManager>();
+        }
+        return cachedMenuManager;
+    }
+
     public MultiplayerMenuManager.PlayerRole EffectiveRole => GetEffectiveLocalRole();
 
     public MultiplayerMenuManager.PlayerRole GetEffectiveLocalRole()
@@ -624,7 +645,7 @@ public class GridManager : MonoBehaviour
             return localRole;
         }
 
-        MultiplayerMenuManager menu = FindFirstObjectByType<MultiplayerMenuManager>();
+        MultiplayerMenuManager menu = GetMenuManager();
         if (menu != null)
         {
             if (menu.localRole != MultiplayerMenuManager.PlayerRole.None)
@@ -682,13 +703,19 @@ public class GridManager : MonoBehaviour
 
         if (notifyNetwork)
         {
+            localInitiatedCurrentClash = true;
+            clashRetrySendTimer = 0.22f;
             currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
             OnClashStartedLocal?.Invoke(r, c, pType, GetEffectiveLocalRole());
             OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
         }
-        else if (currentArenaLayoutSeed == 0)
+        else
         {
-            currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
+            localInitiatedCurrentClash = false;
+            if (currentArenaLayoutSeed == 0)
+            {
+                currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
+            }
         }
 
         // 1. Pause the entire 2D world
@@ -725,6 +752,7 @@ public class GridManager : MonoBehaviour
 
     public void TriggerRemoteClash(int row, int col, PlantType plantType, MultiplayerMenuManager.PlayerRole remoteInitiatorRole = MultiplayerMenuManager.PlayerRole.None)
     {
+        gameplayActive = true;
         clashingPlantRow = row;
         clashingPlantCol = col;
         clashingPlantType = plantType;
@@ -765,6 +793,17 @@ public class GridManager : MonoBehaviour
         clashZoomTimer += Time.deltaTime;
         float t = Mathf.Clamp01(clashZoomTimer / Mathf.Max(0.1f, clashZoomDuration));
         float smoothT = Mathf.SmoothStep(0f, 1f, t);
+
+        if (localInitiatedCurrentClash && !hasRemoteArenaPose)
+        {
+            clashRetrySendTimer -= Time.deltaTime;
+            if (clashRetrySendTimer <= 0f)
+            {
+                clashRetrySendTimer = 0.25f;
+                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole());
+                OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
+            }
+        }
 
         if (targetCamera != null)
         {
@@ -920,6 +959,18 @@ public class GridManager : MonoBehaviour
 
     private void UpdateArenaNetworking()
     {
+        // If we initiated the clash and the remote player hasn't sent a pose yet, resend CLASH & ASEED periodically so they are guaranteed to enter the 3D scene
+        if (localInitiatedCurrentClash && !hasRemoteArenaPose)
+        {
+            clashRetrySendTimer -= Time.deltaTime;
+            if (clashRetrySendTimer <= 0f)
+            {
+                clashRetrySendTimer = 0.35f;
+                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole());
+                OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
+            }
+        }
+
         // Send our pose ~20x per second
         PlayerController pc = GetPrimaryPlayerController();
         arenaPoseSendTimer -= Time.deltaTime;
@@ -940,6 +991,14 @@ public class GridManager : MonoBehaviour
 
     public void SetRemoteArenaPose(Vector3 pos, float yaw)
     {
+        // If we started receiving 3D arena poses from the remote player before CLASH arrived, immediately enter the 3D arena!
+        if (!isIn3DArena && !isZoomingIntoClash)
+        {
+            gameplayActive = true;
+            is2DWorldPaused = true;
+            Enter3D1v1Arena();
+        }
+
         remoteArenaTargetPos = pos;
         remoteArenaTargetYaw = yaw;
         if (!hasRemoteArenaPose && remoteArenaAvatar != null)
@@ -1003,9 +1062,10 @@ public class GridManager : MonoBehaviour
             remoteHitFlashTimer = Mathf.Max(0f, remoteHitFlashTimer - Time.deltaTime);
             if (remoteHpBarFillRenderer != null)
             {
-                remoteHpBarFillRenderer.material.color = (remoteHitFlashTimer > 0f)
+                Color col = (remoteHitFlashTimer > 0f)
                     ? new Color(1.0f, 0.95f, 0.35f)
                     : remoteHpBarBaseColor;
+                remoteHpBarFillRenderer.sharedMaterial = CreateColoredMaterial(col);
             }
         }
 
@@ -1376,6 +1436,7 @@ public class GridManager : MonoBehaviour
         isZoomingIntoClash = false;
         arenaResolving = false;
         hasRemoteArenaPose = false;
+        localInitiatedCurrentClash = false;
 
         if (arena3DRoot != null)
         {
@@ -1529,9 +1590,24 @@ public class GridManager : MonoBehaviour
 
     private PlayerController GetPrimaryPlayerController()
     {
+        if (cachedPlayerController != null)
+        {
+            if (!cachedPlayerController.gameObject.activeInHierarchy)
+            {
+                cachedPlayerController.gameObject.SetActive(true);
+            }
+            cachedPlayerController.enabled = true;
+            return cachedPlayerController;
+        }
+
         GameObject rootPlayer = GameObject.Find("Player");
         if (rootPlayer != null)
         {
+            if (!rootPlayer.activeInHierarchy)
+            {
+                rootPlayer.SetActive(true);
+            }
+
             // Disable any duplicate child PlayerController so only the root Player moves
             foreach (Transform child in rootPlayer.transform)
             {
@@ -1546,11 +1622,33 @@ public class GridManager : MonoBehaviour
             if (pc != null)
             {
                 pc.enabled = true;
+                cachedPlayerController = pc;
                 return pc;
             }
         }
 
-        return FindFirstObjectByType<PlayerController>();
+        cachedPlayerController = FindFirstObjectByType<PlayerController>(FindObjectsInactive.Include);
+        if (cachedPlayerController != null)
+        {
+            if (!cachedPlayerController.gameObject.activeInHierarchy)
+            {
+                cachedPlayerController.gameObject.SetActive(true);
+            }
+            cachedPlayerController.enabled = true;
+            return cachedPlayerController;
+        }
+
+        // Auto-create a Player controller if none exists in the scene so 3D Arena transport always works!
+        GameObject autoPlayer = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+        autoPlayer.name = "Player";
+        Collider defaultCol = autoPlayer.GetComponent<Collider>();
+        if (defaultCol != null) Destroy(defaultCol);
+        CharacterController cc = autoPlayer.AddComponent<CharacterController>();
+        cc.height = 2.0f;
+        cc.radius = 0.45f;
+        cc.center = Vector3.zero;
+        cachedPlayerController = autoPlayer.AddComponent<PlayerController>();
+        return cachedPlayerController;
     }
 
     private void BuildOrShow3DArenaEnvironment()
@@ -1615,27 +1713,13 @@ public class GridManager : MonoBehaviour
         GameObject visual;
         if (localIsPlant)
         {
-            visual = CreateZombieVisual("Visual_Zombie", isGhost: false);
+            visual = Create3DZombiePlaceholder("Visual_3D_Zombie");
             currentArenaOpponentName = "ZOMBIE PLAYER";
 
-            // Strip any colliders on the visual so only the capsule/sphere hitboxes are used
-            foreach (Collider c in visual.GetComponentsInChildren<Collider>())
-            {
-                Destroy(c);
-            }
             visual.transform.SetParent(remoteArenaAvatar.transform, false);
-            visual.transform.localPosition = new Vector3(0f, -0.1f, 0f);
-            visual.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // flat 2D art faces the avatar's forward
-            visual.transform.localScale = Vector3.one * 1.1f;
-
-            // Mirror copy on the back so the texture is visible from every side
-            GameObject back = Instantiate(visual, remoteArenaAvatar.transform, false);
-            back.name = visual.name + "_Back";
-            back.transform.localRotation = Quaternion.identity;
-            foreach (MonoBehaviour mb in back.GetComponentsInChildren<MonoBehaviour>())
-            {
-                mb.enabled = false;
-            }
+            visual.transform.localPosition = Vector3.zero;
+            visual.transform.localRotation = Quaternion.identity;
+            visual.transform.localScale = Vector3.one;
         }
         else
         {
@@ -2383,32 +2467,41 @@ public class GridManager : MonoBehaviour
             return;
         }
 
-        for (int r = 0; r < rows; r++)
+        bool hoveredOccupied = hoveredRow >= 0 && hoveredRow < rows && hoveredCol >= 0 && hoveredCol < columns && placedPlants[hoveredRow, hoveredCol] != null;
+        if (hoveredRow != prevHoveredRow || hoveredCol != prevHoveredCol || isZombieSelected != prevIsZombieSelected || hoveredOccupied != prevHoveredOccupied)
         {
-            for (int c = 0; c < columns; c++)
+            if (prevHoveredRow >= 0 && prevHoveredRow < rows && prevHoveredCol >= 0 && prevHoveredCol < columns)
             {
-                Renderer rend = tileRenderers[r, c];
-                if (rend == null) continue;
+                Renderer prevRend = tileRenderers[prevHoveredRow, prevHoveredCol];
+                if (prevRend != null)
+                {
+                    prevRend.sharedMaterial = CreateColoredMaterial(GetBaseTileColor(prevHoveredRow, prevHoveredCol));
+                }
+            }
 
-                if (r == hoveredRow && c == hoveredCol)
+            if (hoveredRow >= 0 && hoveredRow < rows && hoveredCol >= 0 && hoveredCol < columns)
+            {
+                Renderer curRend = tileRenderers[hoveredRow, hoveredCol];
+                if (curRend != null)
                 {
                     if (isZombieSelected)
                     {
-                        // Check if this column is valid for zombie placement (last 2 columns on the right)
-                        bool allowed = IsColumnAllowedForZombie(c);
-                        rend.material.color = allowed ? tileZombieHoverColor : new Color(0.85f, 0.2f, 0.2f, 1.0f);
+                        bool allowed = IsColumnAllowedForZombie(hoveredCol);
+                        Color col = allowed ? tileZombieHoverColor : new Color(0.85f, 0.2f, 0.2f, 1.0f);
+                        curRend.sharedMaterial = CreateColoredMaterial(col);
                     }
                     else
                     {
-                        bool occupied = placedPlants[r, c] != null;
-                        rend.material.color = occupied ? tileOccupiedColor : tileHoverColor;
+                        Color col = hoveredOccupied ? tileOccupiedColor : tileHoverColor;
+                        curRend.sharedMaterial = CreateColoredMaterial(col);
                     }
                 }
-                else
-                {
-                    rend.material.color = GetBaseTileColor(r, c);
-                }
             }
+
+            prevHoveredRow = hoveredRow;
+            prevHoveredCol = hoveredCol;
+            prevIsZombieSelected = isZombieSelected;
+            prevHoveredOccupied = hoveredOccupied;
         }
 
         bool showPlantGhost = isPlantSelected
@@ -2590,6 +2683,141 @@ public class GridManager : MonoBehaviour
         return GameVisuals.CreatePlant(type, objectName, isGhost, TileWidth, TileHeight);
     }
 
+    private GameObject Create3DZombiePlaceholder(string objectName)
+    {
+        GameObject root = new GameObject(objectName);
+
+        Material skinMat = CreateColoredMaterial(new Color(0.50f, 0.74f, 0.30f));
+        Material darkSkinMat = CreateColoredMaterial(new Color(0.38f, 0.58f, 0.22f));
+        Material coatMat = CreateColoredMaterial(new Color(0.42f, 0.16f, 0.58f));
+        Material pantsMat = CreateColoredMaterial(new Color(0.20f, 0.28f, 0.38f));
+        Material shoeMat = CreateColoredMaterial(new Color(0.28f, 0.18f, 0.14f));
+        Material tieMat = CreateColoredMaterial(new Color(0.85f, 0.18f, 0.18f));
+        Material eyeWhiteMat = CreateColoredMaterial(Color.white);
+        Material pupilMat = CreateColoredMaterial(new Color(0.08f, 0.10f, 0.08f));
+
+        // Legs & Shoes
+        GameObject leftLeg = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        leftLeg.name = "LeftLeg";
+        leftLeg.transform.SetParent(root.transform, false);
+        leftLeg.transform.localPosition = new Vector3(-0.18f, -0.55f, 0f);
+        leftLeg.transform.localScale = new Vector3(0.22f, 0.35f, 0.22f);
+        DestroyCollider(leftLeg);
+        leftLeg.GetComponent<Renderer>().sharedMaterial = pantsMat;
+
+        GameObject rightLeg = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        rightLeg.name = "RightLeg";
+        rightLeg.transform.SetParent(root.transform, false);
+        rightLeg.transform.localPosition = new Vector3(0.18f, -0.55f, 0f);
+        rightLeg.transform.localScale = new Vector3(0.22f, 0.35f, 0.22f);
+        DestroyCollider(rightLeg);
+        rightLeg.GetComponent<Renderer>().sharedMaterial = pantsMat;
+
+        GameObject leftShoe = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        leftShoe.name = "LeftShoe";
+        leftShoe.transform.SetParent(root.transform, false);
+        leftShoe.transform.localPosition = new Vector3(-0.18f, -0.88f, 0.06f);
+        leftShoe.transform.localScale = new Vector3(0.24f, 0.14f, 0.36f);
+        DestroyCollider(leftShoe);
+        leftShoe.GetComponent<Renderer>().sharedMaterial = shoeMat;
+
+        GameObject rightShoe = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        rightShoe.name = "RightShoe";
+        rightShoe.transform.SetParent(root.transform, false);
+        rightShoe.transform.localPosition = new Vector3(0.18f, -0.88f, 0.06f);
+        rightShoe.transform.localScale = new Vector3(0.24f, 0.14f, 0.36f);
+        DestroyCollider(rightShoe);
+        rightShoe.GetComponent<Renderer>().sharedMaterial = shoeMat;
+
+        // Torso (Purple Suit Jacket) & Red Tie
+        GameObject torso = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        torso.name = "Torso";
+        torso.transform.SetParent(root.transform, false);
+        torso.transform.localPosition = new Vector3(0f, -0.02f, 0f);
+        torso.transform.localScale = new Vector3(0.68f, 0.72f, 0.40f);
+        DestroyCollider(torso);
+        torso.GetComponent<Renderer>().sharedMaterial = coatMat;
+
+        GameObject tie = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        tie.name = "RedTie";
+        tie.transform.SetParent(root.transform, false);
+        tie.transform.localPosition = new Vector3(0f, 0.02f, 0.21f);
+        tie.transform.localScale = new Vector3(0.12f, 0.46f, 0.04f);
+        DestroyCollider(tie);
+        tie.GetComponent<Renderer>().sharedMaterial = tieMat;
+
+        // Outstretched Zombie Arms reaching forward (+Z)
+        GameObject leftArm = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        leftArm.name = "LeftArm";
+        leftArm.transform.SetParent(root.transform, false);
+        leftArm.transform.localPosition = new Vector3(-0.42f, 0.16f, 0.38f);
+        leftArm.transform.localRotation = Quaternion.Euler(82f, 0f, 0f);
+        leftArm.transform.localScale = new Vector3(0.18f, 0.38f, 0.18f);
+        DestroyCollider(leftArm);
+        leftArm.GetComponent<Renderer>().sharedMaterial = skinMat;
+
+        GameObject rightArm = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        rightArm.name = "RightArm";
+        rightArm.transform.SetParent(root.transform, false);
+        rightArm.transform.localPosition = new Vector3(0.42f, 0.14f, 0.38f);
+        rightArm.transform.localRotation = Quaternion.Euler(85f, 0f, 0f);
+        rightArm.transform.localScale = new Vector3(0.18f, 0.38f, 0.18f);
+        DestroyCollider(rightArm);
+        rightArm.GetComponent<Renderer>().sharedMaterial = skinMat;
+
+        // 3D Zombie Head & Jaw
+        GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        head.name = "Head";
+        head.transform.SetParent(root.transform, false);
+        head.transform.localPosition = new Vector3(0f, 0.62f, 0.04f);
+        head.transform.localScale = new Vector3(0.66f, 0.68f, 0.64f);
+        DestroyCollider(head);
+        head.GetComponent<Renderer>().sharedMaterial = skinMat;
+
+        GameObject jaw = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        jaw.name = "Jaw";
+        jaw.transform.SetParent(root.transform, false);
+        jaw.transform.localPosition = new Vector3(0f, 0.42f, 0.14f);
+        jaw.transform.localScale = new Vector3(0.44f, 0.18f, 0.38f);
+        DestroyCollider(jaw);
+        jaw.GetComponent<Renderer>().sharedMaterial = darkSkinMat;
+
+        // Mismatched Cartoon Zombie Eyes on front (+Z)
+        GameObject leftEye = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        leftEye.name = "LeftEye";
+        leftEye.transform.SetParent(root.transform, false);
+        leftEye.transform.localPosition = new Vector3(-0.14f, 0.66f, 0.31f);
+        leftEye.transform.localScale = new Vector3(0.18f, 0.18f, 0.10f);
+        DestroyCollider(leftEye);
+        leftEye.GetComponent<Renderer>().sharedMaterial = eyeWhiteMat;
+
+        GameObject leftPupil = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        leftPupil.name = "LeftPupil";
+        leftPupil.transform.SetParent(root.transform, false);
+        leftPupil.transform.localPosition = new Vector3(-0.14f, 0.66f, 0.35f);
+        leftPupil.transform.localScale = new Vector3(0.08f, 0.08f, 0.06f);
+        DestroyCollider(leftPupil);
+        leftPupil.GetComponent<Renderer>().sharedMaterial = pupilMat;
+
+        GameObject rightEye = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        rightEye.name = "RightEye";
+        rightEye.transform.SetParent(root.transform, false);
+        rightEye.transform.localPosition = new Vector3(0.14f, 0.65f, 0.31f);
+        rightEye.transform.localScale = new Vector3(0.13f, 0.13f, 0.09f);
+        DestroyCollider(rightEye);
+        rightEye.GetComponent<Renderer>().sharedMaterial = eyeWhiteMat;
+
+        GameObject rightPupil = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        rightPupil.name = "RightPupil";
+        rightPupil.transform.SetParent(root.transform, false);
+        rightPupil.transform.localPosition = new Vector3(0.14f, 0.65f, 0.34f);
+        rightPupil.transform.localScale = new Vector3(0.06f, 0.06f, 0.05f);
+        DestroyCollider(rightPupil);
+        rightPupil.GetComponent<Renderer>().sharedMaterial = pupilMat;
+
+        return root;
+    }
+
     private GameObject Create3DPlantPlaceholder(PlantType type, string objectName)
     {
         GameObject root = new GameObject(objectName);
@@ -2711,6 +2939,12 @@ public class GridManager : MonoBehaviour
 
     private Material CreateColoredMaterial(Color color)
     {
+        Color32 key = color;
+        if (cachedMaterials.TryGetValue(key, out Material existing) && existing != null)
+        {
+            return existing;
+        }
+
         if (sharedBaseMaterial == null)
         {
             Renderer ownRenderer = GetComponent<Renderer>();
@@ -2738,6 +2972,7 @@ public class GridManager : MonoBehaviour
         {
             mat.SetColor("_BaseColor", color);
         }
+        cachedMaterials[key] = mat;
         return mat;
     }
 
