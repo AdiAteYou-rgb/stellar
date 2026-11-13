@@ -55,6 +55,11 @@ public class WallZombie : MonoBehaviour
         CacheLimbs();
     }
 
+    public void MarkClashResolved()
+    {
+        triggeredClash = true;
+    }
+
     public void TakeDamage(int amount)
     {
         currentHealth -= amount;

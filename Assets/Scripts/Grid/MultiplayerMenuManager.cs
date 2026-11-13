@@ -4,6 +4,15 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Tasks;
+using Unity.Collections;
+using Unity.Networking.Transport;
+using Unity.Networking.Transport.Relay;
+using Unity.Networking.Transport.Utilities;
+using Unity.Services.Authentication;
+using Unity.Services.Core;
+using Unity.Services.Relay;
+using Unity.Services.Relay.Models;
 using UnityEngine;
 
 [ExecuteAlways]
@@ -51,7 +60,18 @@ public class MultiplayerMenuManager : MonoBehaviour
     public PlayerRole joinerRole = PlayerRole.None;
     public PlayerRole localRole = PlayerRole.None;
 
-    // Networking internals (TCP P2P for instant local/LAN + code encoding)
+    // Networking internals: Unity Relay (Internet / Cross-Network) + TCP P2P fallback (Offline / LAN)
+    private NetworkDriver relayDriver;
+    private NetworkPipeline relayReliablePipeline;
+    private NetworkConnection relayConnection;
+    private bool isUsingRelay = false;
+    private bool isRelayHostingActive = false;
+    private bool isAllocatingRelay = false;
+    private string pendingRelayJoinCode = "";
+    private int networkSessionId = 0;
+    private static string s_SessionProfileName;
+    private readonly ConcurrentQueue<string> outgoingRelayMessages = new ConcurrentQueue<string>();
+
     private TcpListener tcpServer;
     private TcpClient connectedClient;
     private StreamReader netReader;
@@ -107,6 +127,7 @@ public class MultiplayerMenuManager : MonoBehaviour
                 gameplayWallGrid.OnArenaResolvedLocal += HandleArenaResolved;
                 gameplayWallGrid.OnArenaStunLocal += HandleArenaStun;
                 gameplayWallGrid.OnArenaAbilityFxLocal += HandleArenaAbilityFx;
+                gameplayWallGrid.OnArenaSeedLocal += HandleArenaSeed;
             }
             SnapCameraToMenuWall();
         }
@@ -142,6 +163,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             gameplayWallGrid.OnArenaResolvedLocal -= HandleArenaResolved;
             gameplayWallGrid.OnArenaStunLocal -= HandleArenaStun;
             gameplayWallGrid.OnArenaAbilityFxLocal -= HandleArenaAbilityFx;
+            gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
         }
         StopNetwork();
     }
@@ -188,6 +210,9 @@ public class MultiplayerMenuManager : MonoBehaviour
         {
             codeCopiedTimer -= Time.deltaTime;
         }
+
+        // Pump Unity Relay Transport driver if active
+        UpdateRelayDriver();
 
         // Process incoming network messages on the Unity main thread
         while (incomingMessages.TryDequeue(out string msg))
@@ -236,19 +261,164 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
     }
 
-    // ==================== HOST & JOIN NETWORKING ====================
+    // ==================== HOST & JOIN NETWORKING (UNITY RELAY + TCP FALLBACK) ====================
+
+    private static async Task EnsureUnityServicesInitializedAsync()
+    {
+        if (string.IsNullOrEmpty(s_SessionProfileName))
+        {
+            s_SessionProfileName = "P_" + Guid.NewGuid().ToString("N").Substring(0, 12);
+        }
+
+        if (UnityServices.State == ServicesInitializationState.Uninitialized)
+        {
+            var options = new InitializationOptions();
+            await UnityServices.InitializeAsync(options);
+        }
+        else
+        {
+            while (UnityServices.State == ServicesInitializationState.Initializing)
+            {
+                await Task.Delay(50);
+            }
+        }
+
+        if (!AuthenticationService.Instance.IsSignedIn)
+        {
+            try
+            {
+                AuthenticationService.Instance.SwitchProfile(s_SessionProfileName);
+            }
+            catch
+            {
+                // Ignore if profile already set
+            }
+            await AuthenticationService.Instance.SignInAnonymouslyAsync();
+        }
+    }
+
+    private void CreateAndConfigureRelayDriver(ref RelayServerData relayServerData)
+    {
+        DisposeRelayDriver();
+
+        var settings = new NetworkSettings();
+        settings.WithNetworkConfigParameters(
+            maxConnectAttempts: 60,
+            connectTimeoutMS: 1000,
+            disconnectTimeoutMS: 30000,
+            heartbeatTimeoutMS: 500);
+        settings.WithRelayParameters(ref relayServerData);
+        settings.WithReliableStageParameters(windowSize: 64, maximumResendTime: 750);
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        relayDriver = NetworkDriver.Create(new WebSocketNetworkInterface(), settings);
+#else
+        relayDriver = NetworkDriver.Create(new UDPNetworkInterface(), settings);
+#endif
+        relayReliablePipeline = relayDriver.CreatePipeline(typeof(ReliableSequencedPipelineStage));
+    }
+
+    private void UpdateRelayDriver()
+    {
+        if (!relayDriver.IsCreated)
+        {
+            return;
+        }
+
+        // 1. Queue outgoing messages into driver before ScheduleUpdate flushes pipelines & socket
+        if (relayConnection != default &&
+            relayDriver.GetConnectionState(relayConnection) == NetworkConnection.State.Connected)
+        {
+            while (outgoingRelayMessages.TryDequeue(out string outMsg))
+            {
+                if (string.IsNullOrEmpty(outMsg)) continue;
+
+                NetworkPipeline pipe = outMsg.StartsWith("APOSE:") ? NetworkPipeline.Null : relayReliablePipeline;
+                int res = relayDriver.BeginSend(pipe, relayConnection, out DataStreamWriter writer);
+                if (res == 0)
+                {
+                    FixedString512Bytes fs = new FixedString512Bytes(outMsg);
+                    writer.WriteFixedString512(fs);
+                    relayDriver.EndSend(writer);
+                }
+            }
+        }
+
+        // 2. Complete driver update tick
+        relayDriver.ScheduleUpdate().Complete();
+
+        // 3. Accept incoming connections (Host) before popping events
+        if (isHost && relayDriver.Listening)
+        {
+            NetworkConnection incoming;
+            while ((incoming = relayDriver.Accept()) != default)
+            {
+                relayConnection = incoming;
+                isUsingRelay = true;
+            }
+        }
+
+        // 4. Pop all connection & data events
+        NetworkEvent.Type cmd;
+        while ((cmd = relayDriver.PopEvent(out NetworkConnection conn, out DataStreamReader stream)) != NetworkEvent.Type.Empty)
+        {
+            if (cmd == NetworkEvent.Type.Connect)
+            {
+                relayConnection = conn;
+                isUsingRelay = true;
+                if (!isHost)
+                {
+                    outgoingRelayMessages.Enqueue("JOIN:" + pendingRelayJoinCode);
+                }
+            }
+            else if (cmd == NetworkEvent.Type.Data)
+            {
+                relayConnection = conn;
+                isUsingRelay = true;
+                FixedString512Bytes raw = stream.ReadFixedString512();
+                string line = raw.ToString();
+
+                if (isHost && line.StartsWith("JOIN:"))
+                {
+                    outgoingRelayMessages.Enqueue("ACCEPTED");
+                    incomingMessages.Enqueue("PLAYER_JOINED");
+                }
+                else if (!isHost && line == "ACCEPTED")
+                {
+                    incomingMessages.Enqueue("CONNECTED_TO_HOST");
+                }
+                else
+                {
+                    incomingMessages.Enqueue(line);
+                }
+            }
+            else if (cmd == NetworkEvent.Type.Disconnect)
+            {
+                if (conn == relayConnection)
+                {
+                    relayConnection = default;
+                }
+                if (!isHost && currentState == MenuState.JoiningEnterCode)
+                {
+                    incomingMessages.Enqueue("ERROR:Relay connection closed or timed out. Check the code and try again!");
+                }
+            }
+        }
+    }
 
     public void StartHosting()
     {
         StopNetwork();
+        int sessionId = ++networkSessionId;
         isHost = true;
         hostRole = PlayerRole.None;
         joinerRole = PlayerRole.None;
         localRole = PlayerRole.None;
+        currentState = MenuState.HostingWaitingForPlayer;
 
+        // Start local TCP listener in the background as an automatic offline/local fallback
         try
         {
-            // Pick a random starting port in range 7200..8800 so ports aren't always 7777
             int randomStart = UnityEngine.Random.Range(7200, 8800);
             hostingPort = randomStart;
             for (int i = 0; i < 200; i++)
@@ -267,23 +437,65 @@ public class MultiplayerMenuManager : MonoBehaviour
                 }
             }
 
-            if (tcpServer == null)
+            if (tcpServer != null)
             {
-                statusMessage = "Could not find an available port to host on!";
-                return;
+                networkRunning = true;
+                networkThread = new Thread(HostAcceptLoop) { IsBackground = true };
+                networkThread.Start();
+            }
+        }
+        catch
+        {
+            // Ignore local TCP errors if Relay succeeds
+        }
+
+        // Allocate online room on Unity Relay so friends on ANY network can join with the 6-char code
+        _ = StartRelayHostAsync(sessionId);
+    }
+
+    private async Task StartRelayHostAsync(int sessionId)
+    {
+        isAllocatingRelay = true;
+        isRelayHostingActive = false;
+        hostJoinCode = "......";
+        statusMessage = "Creating Online Relay Lobby (works over any network)...";
+
+        try
+        {
+            await EnsureUnityServicesInitializedAsync();
+            if (sessionId != networkSessionId) return;
+
+            Allocation allocation = await RelayService.Instance.CreateAllocationAsync(2);
+            if (sessionId != networkSessionId) return;
+
+            string relayCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
+            if (sessionId != networkSessionId) return;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            RelayServerData relayServerData = allocation.ToRelayServerData("wss");
+#else
+            RelayServerData relayServerData = allocation.ToRelayServerData("dtls");
+#endif
+            CreateAndConfigureRelayDriver(ref relayServerData);
+
+            if (relayDriver.Bind(NetworkEndpoint.AnyIpv4) != 0 || relayDriver.Listen() != 0)
+            {
+                throw new Exception("Failed to bind or listen on Relay driver.");
             }
 
-            hostJoinCode = GenerateRandomJoinCode(hostingPort);
-            statusMessage = "Waiting for the other player to enter the code...";
-            currentState = MenuState.HostingWaitingForPlayer;
-
-            networkRunning = true;
-            networkThread = new Thread(HostAcceptLoop) { IsBackground = true };
-            networkThread.Start();
+            isRelayHostingActive = true;
+            isAllocatingRelay = false;
+            hostJoinCode = relayCode.ToUpperInvariant();
+            statusMessage = "Online Relay Active! Share this code with Player 2 on ANY network or PC.";
         }
         catch (Exception ex)
         {
-            statusMessage = "Host error: " + ex.Message;
+            if (sessionId != networkSessionId) return;
+            isAllocatingRelay = false;
+            isRelayHostingActive = false;
+            hostJoinCode = GenerateRandomJoinCode(hostingPort);
+            statusMessage = $"Offline/LAN Fallback Active ({ex.GetType().Name}). Share code for local/LAN play.";
+            Debug.LogWarning($"Unity Relay host allocation failed, using local TCP fallback: {ex.Message}");
         }
     }
 
@@ -305,6 +517,7 @@ public class MultiplayerMenuManager : MonoBehaviour
                     (line.Substring(5).Trim().Equals(hostJoinCode, StringComparison.OrdinalIgnoreCase) ||
                      (TryDecodeCodeToPort(line.Substring(5), out int p, out _) && p == hostingPort)))
                 {
+                    isUsingRelay = false;
                     netWriter.WriteLine("ACCEPTED");
                     incomingMessages.Enqueue("PLAYER_JOINED");
                     ReadLoop();
@@ -328,23 +541,82 @@ public class MultiplayerMenuManager : MonoBehaviour
         string cleanCode = (enteredJoinCode ?? "").Trim().ToUpperInvariant().Replace(" ", "");
         if (string.IsNullOrEmpty(cleanCode))
         {
-            statusMessage = "Please enter the code from the Host!";
-            return;
-        }
-
-        if (!TryDecodeCodeToPort(cleanCode, out int port, out string hostIp))
-        {
-            statusMessage = "Invalid code format! Ask the Host for their 6-character code.";
+            statusMessage = "Please enter the 6-character code from the Host!";
             return;
         }
 
         StopNetwork();
+        int sessionId = ++networkSessionId;
         isHost = false;
         hostRole = PlayerRole.None;
         joinerRole = PlayerRole.None;
         localRole = PlayerRole.None;
-        statusMessage = $"Connecting to Host ({cleanCode})...";
 
+        // If the user explicitly typed CODE@IP, connect directly via TCP
+        if (cleanCode.Contains("@"))
+        {
+            if (!TryDecodeCodeToPort(cleanCode, out int port, out string hostIp))
+            {
+                statusMessage = "Invalid CODE@IP format!";
+                return;
+            }
+            ConnectViaTcp(cleanCode, port, hostIp);
+            return;
+        }
+
+        // Connect over the internet via Unity Relay (with automatic fallback to local TCP if offline)
+        _ = ConnectViaRelayOrFallbackAsync(cleanCode, sessionId);
+    }
+
+    private async Task ConnectViaRelayOrFallbackAsync(string cleanCode, int sessionId)
+    {
+        statusMessage = $"Connecting to Host via Online Relay ({cleanCode})...";
+
+        try
+        {
+            await EnsureUnityServicesInitializedAsync();
+            if (sessionId != networkSessionId) return;
+
+            JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(cleanCode);
+            if (sessionId != networkSessionId) return;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            RelayServerData relayServerData = joinAllocation.ToRelayServerData("wss");
+#else
+            RelayServerData relayServerData = joinAllocation.ToRelayServerData("dtls");
+#endif
+            CreateAndConfigureRelayDriver(ref relayServerData);
+
+            if (relayDriver.Bind(NetworkEndpoint.AnyIpv4) != 0)
+            {
+                throw new Exception("Failed to bind local Relay client socket.");
+            }
+
+            pendingRelayJoinCode = cleanCode;
+            isUsingRelay = true;
+            relayConnection = relayDriver.Connect(relayServerData.Endpoint);
+            statusMessage = $"Handshaking with Host ({cleanCode})...";
+        }
+        catch (Exception relayEx)
+        {
+            if (sessionId != networkSessionId) return;
+
+            // If Relay lookup failed, check if this is a local offline port-encoded code on the same PC
+            if (TryDecodeCodeToPort(cleanCode, out int localPort, out string hostIp))
+            {
+                Debug.Log($"Relay join failed ({relayEx.Message}); trying local TCP fallback on {hostIp}:{localPort}...");
+                ConnectViaTcp(cleanCode, localPort, hostIp);
+            }
+            else
+            {
+                statusMessage = "Invalid or expired Join Code! Ask the Host for their 6-character code.";
+            }
+        }
+    }
+
+    private void ConnectViaTcp(string cleanCode, int port, string hostIp)
+    {
+        statusMessage = $"Connecting to Host ({cleanCode})...";
         networkRunning = true;
         networkThread = new Thread(() =>
         {
@@ -356,7 +628,7 @@ public class MultiplayerMenuManager : MonoBehaviour
 
                 if (!connected || !connectedClient.Connected)
                 {
-                    incomingMessages.Enqueue("ERROR:Could not connect to Host. Make sure Host is waiting!");
+                    incomingMessages.Enqueue("ERROR:Could not find Host for this code. Make sure the Host is waiting in the lobby!");
                     return;
                 }
 
@@ -365,13 +637,13 @@ public class MultiplayerMenuManager : MonoBehaviour
                 netReader = new StreamReader(stream);
                 netWriter = new StreamWriter(stream) { AutoFlush = true };
 
-                // Extract raw 6-char code part if IP was prefixed
                 string rawCode = cleanCode.Contains("@") ? cleanCode.Split('@')[0] : cleanCode;
                 netWriter.WriteLine("JOIN:" + rawCode);
 
                 string response = netReader.ReadLine();
                 if (response == "ACCEPTED")
                 {
+                    isUsingRelay = false;
                     incomingMessages.Enqueue("CONNECTED_TO_HOST");
                     ReadLoop();
                 }
@@ -408,6 +680,14 @@ public class MultiplayerMenuManager : MonoBehaviour
 
     private void SendNetworkMessage(string msg)
     {
+        if (string.IsNullOrEmpty(msg)) return;
+
+        if (isUsingRelay && relayDriver.IsCreated && relayConnection != default)
+        {
+            outgoingRelayMessages.Enqueue(msg);
+            return;
+        }
+
         try
         {
             if (netWriter != null)
@@ -582,6 +862,13 @@ public class MultiplayerMenuManager : MonoBehaviour
                     );
                 }
             }
+            else if (msg.StartsWith("ASEED:"))
+            {
+                if (int.TryParse(msg.Substring(6), out int seed))
+                {
+                    gameplayWallGrid.ApplyRemoteArenaSeed(seed);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -627,6 +914,11 @@ public class MultiplayerMenuManager : MonoBehaviour
     private void HandleArenaAbilityFx(string fxType, Vector3 start, Vector3 end)
     {
         SendNetworkMessage($"AFX:{fxType},{F(start.x)},{F(start.y)},{F(start.z)},{F(end.x)},{F(end.y)},{F(end.z)}");
+    }
+
+    private void HandleArenaSeed(int seed)
+    {
+        SendNetworkMessage($"ASEED:{seed}");
     }
 
     public void BeginTransportToGameplayWall()
@@ -720,7 +1012,7 @@ public class MultiplayerMenuManager : MonoBehaviour
 
     /// <summary>
     /// Generates a random 6-character alphanumeric room code (Base-36) that encodes the host port with a random 19-bit salt.
-    /// Every time you click Host, a totally new, unique room code is generated (e.g. 97S2J4, Z6C5H1, 7LR3O6).
+    /// Used as an automatic offline fallback when no internet connection is available.
     /// </summary>
     public static string GenerateRandomJoinCode(int port)
     {
@@ -814,9 +1106,32 @@ public class MultiplayerMenuManager : MonoBehaviour
         return false;
     }
 
+    private void DisposeRelayDriver()
+    {
+        relayConnection = default;
+        while (outgoingRelayMessages.TryDequeue(out _)) { }
+        if (relayDriver.IsCreated)
+        {
+            try
+            {
+                relayDriver.Dispose();
+            }
+            catch
+            {
+            }
+            relayDriver = default;
+        }
+    }
+
     private void StopNetwork()
     {
+        networkSessionId++;
         networkRunning = false;
+        isUsingRelay = false;
+        isRelayHostingActive = false;
+        isAllocatingRelay = false;
+        DisposeRelayDriver();
+
         try { netReader?.Close(); } catch { }
         try { netWriter?.Close(); } catch { }
         try { connectedClient?.Close(); } catch { }
@@ -1133,7 +1448,7 @@ public class MultiplayerMenuManager : MonoBehaviour
                 fontSize = 12
             };
             footerStyle.normal.textColor = new Color(0.45f, 0.55f, 0.70f);
-            GUI.Label(new Rect(centerX - 250f, centerY + 160f, 500f, 24f), "v1.2.0 • 16:9 Orthographic • Netcode Ready", footerStyle);
+            GUI.Label(new Rect(centerX - 250f, centerY + 160f, 500f, 24f), "v1.3.0 • 16:9 Orthographic • Online Relay Ready", footerStyle);
         }
         else if (currentState == MenuState.HostOrJoinSelect)
         {
@@ -1141,18 +1456,18 @@ public class MultiplayerMenuManager : MonoBehaviour
             DrawPanelBox(cardRect, new Color(0.08f, 0.12f, 0.18f, 0.95f), new Color(0.35f, 0.75f, 1.0f, 0.75f));
 
             GUI.Label(new Rect(centerX - 280f, centerY - 200f, 560f, 42f), "SELECT MULTIPLAYER MODE", titleStyle);
-            GUI.Label(new Rect(centerX - 280f, centerY - 155f, 560f, 30f), "Choose how you want to connect with another player:", subStyle);
+            GUI.Label(new Rect(centerX - 280f, centerY - 155f, 560f, 30f), "Connect with a friend on ANY network or PC:", subStyle);
 
             GUI.backgroundColor = new Color(0.25f, 0.75f, 0.98f);
             if (GUI.Button(new Rect(centerX - 280f, centerY - 105f, 270f, 185f),
-                "👑 HOST GAME\n\nCreate a new lobby\n& get a 6-character code\nto invite Player 2!", bigBtn))
+                "👑 HOST GAME\n\nCreate an online lobby\n& get a 6-character code\nto invite Player 2!", bigBtn))
             {
                 StartHosting();
             }
 
             GUI.backgroundColor = new Color(0.30f, 0.90f, 0.45f);
             if (GUI.Button(new Rect(centerX + 10f, centerY - 105f, 270f, 185f),
-                "🔗 JOIN GAME\n\nEnter the Host's\n6-character code\nto connect instantly!", bigBtn))
+                "🔗 JOIN GAME\n\nEnter the Host's\n6-character code\nto connect from anywhere!", bigBtn))
             {
                 statusMessage = "Enter the Host's 6-character code below:";
                 currentState = MenuState.JoiningEnterCode;
@@ -1174,7 +1489,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             GUI.Label(new Rect(centerX - 300f, centerY - 190f, 600f, 30f), "Share this 6-Character Join Code with Player 2:", subStyle);
 
             // Spaced-out Code Box for maximum legibility
-            string spacedCode = string.Join("   ", hostJoinCode.ToCharArray());
+            string spacedCode = string.Join("   ", (hostJoinCode ?? "").ToCharArray());
             GUIStyle codeStyle = new GUIStyle(GUI.skin.box)
             {
                 fontSize = 36,
@@ -1189,22 +1504,30 @@ public class MultiplayerMenuManager : MonoBehaviour
             GUI.backgroundColor = (codeCopiedTimer > 0f) ? new Color(0.3f, 0.95f, 0.5f) : new Color(0.32f, 0.75f, 0.98f);
             if (GUI.Button(new Rect(centerX - 210f, centerY - 70f, 250f, 44f), copyLabel, normalBtn))
             {
-                GUIUtility.systemCopyBuffer = hostJoinCode;
-                codeCopiedTimer = 2.5f;
-                statusMessage = "Code copied to clipboard! Share it with Player 2.";
+                if (!isAllocatingRelay && !string.IsNullOrEmpty(hostJoinCode))
+                {
+                    GUIUtility.systemCopyBuffer = hostJoinCode;
+                    codeCopiedTimer = 2.5f;
+                    statusMessage = "Code copied to clipboard! Share it with Player 2.";
+                }
             }
 
             GUI.backgroundColor = new Color(0.85f, 0.85f, 0.90f);
             if (GUI.Button(new Rect(centerX + 50f, centerY - 70f, 160f, 44f), "🔄 New Code", normalBtn))
             {
-                hostJoinCode = GenerateRandomJoinCode(hostingPort);
-                codeCopiedTimer = 0f;
-                statusMessage = "Generated a new 6-character room code!";
+                if (!isAllocatingRelay)
+                {
+                    codeCopiedTimer = 0f;
+                    StartHosting();
+                }
             }
 
             // Generous Status & Network info box (Word-wrap with ample height, NEVER clips)
             string pulse = (Time.time % 1.0f < 0.5f) ? "●" : "○";
-            string fullStatus = $"{pulse} WAITING FOR PLAYER 2 TO CONNECT...\nLocal Port: {hostingPort}   |   LAN Format: {hostJoinCode}@127.0.0.1\n{statusMessage}";
+            string modeLabel = isRelayHostingActive
+                ? "🌐 Mode: ONLINE RELAY (Works across ANY Wi-Fi / Network / PC)"
+                : (isAllocatingRelay ? "⏳ Allocating Unity Cloud Relay Room..." : $"🏠 Mode: Local / LAN (Port {hostingPort})");
+            string fullStatus = $"{pulse} WAITING FOR PLAYER 2 TO CONNECT...\n{modeLabel}\n{statusMessage}";
 
             GUIStyle statusBoxStyle = new GUIStyle(GUI.skin.box)
             {

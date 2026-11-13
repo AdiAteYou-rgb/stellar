@@ -116,14 +116,19 @@ public class GridManager : MonoBehaviour
     public event Action<bool> OnArenaResolvedLocal;                            // true = zombie won
     public event Action<float> OnArenaStunLocal;                               // duration in seconds (Durian immobilize)
     public event Action<string, Vector3, Vector3> OnArenaAbilityFxLocal;       // fxType, startPos, endPos
+    public event Action<int> OnArenaSeedLocal;                                 // synced random seed for 3D arena layout
 
     private int nextMoonId = 1;
     public bool IsIn3DArena => isIn3DArena;
     /// <summary>Only the Plant player (or solo) spawns moons; the Zombie player receives them over the network.</summary>
     public bool IsMoonAuthority => GetEffectiveLocalRole() != MultiplayerMenuManager.PlayerRole.Zombie;
 
-    // 3D arena remote player avatar
+    // 3D arena remote player avatar & random layout seed
     private GameObject remoteArenaAvatar;
+    private GameObject arenaObstaclesRoot;
+    private Renderer arenaFloorRenderer;
+    private int currentArenaLayoutSeed = 0;
+    private string currentArenaPresetName = "Random";
     private Vector3 remoteArenaTargetPos;
     private float remoteArenaTargetYaw;
     private bool hasRemoteArenaPose = false;
@@ -446,6 +451,12 @@ public class GridManager : MonoBehaviour
                     {
                         ResolveArena(zombieWon: false, notifyNetwork: true);
                     }
+                    else if (Input.GetKeyDown(KeyCode.R))
+                    {
+                        currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
+                        RebuildRandomArenaLayout(currentArenaLayoutSeed);
+                        OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
+                    }
                 }
 
                 if (Input.GetKeyDown(KeyCode.Backspace))
@@ -671,7 +682,13 @@ public class GridManager : MonoBehaviour
 
         if (notifyNetwork)
         {
+            currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
             OnClashStartedLocal?.Invoke(r, c, pType, GetEffectiveLocalRole());
+            OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
+        }
+        else if (currentArenaLayoutSeed == 0)
+        {
+            currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
         }
 
         // 1. Pause the entire 2D world
@@ -1554,7 +1571,8 @@ public class GridManager : MonoBehaviour
         floor.transform.SetParent(arena3DRoot.transform, false);
         floor.transform.localPosition = new Vector3(0f, -0.25f, 0f);
         floor.transform.localScale = new Vector3(44f, 0.5f, 44f);
-        floor.GetComponent<Renderer>().material = CreateColoredMaterial(new Color(0.22f, 0.28f, 0.24f));
+        arenaFloorRenderer = floor.GetComponent<Renderer>();
+        arenaFloorRenderer.material = CreateColoredMaterial(new Color(0.22f, 0.28f, 0.24f));
 
         // 4 Outer Perimeter Arena Walls
         CreateArenaBlock("Wall_North", new Vector3(0f, 1.75f, 22f), new Vector3(44f, 3.5f, 0.8f), new Color(0.32f, 0.36f, 0.42f));
@@ -1562,17 +1580,12 @@ public class GridManager : MonoBehaviour
         CreateArenaBlock("Wall_East", new Vector3(22f, 1.75f, 0f), new Vector3(0.8f, 3.5f, 44f), new Color(0.32f, 0.36f, 0.42f));
         CreateArenaBlock("Wall_West", new Vector3(-22f, 1.75f, 0f), new Vector3(0.8f, 3.5f, 44f), new Color(0.32f, 0.36f, 0.42f));
 
-        // Cover pillars & new tactical obstacles inside the expanded arena
-        CreateArenaBlock("Pillar_Left", new Vector3(-5.5f, 1.4f, 0f), new Vector3(1.8f, 2.8f, 1.8f), new Color(0.45f, 0.52f, 0.48f));
-        CreateArenaBlock("Pillar_Right", new Vector3(5.5f, 1.4f, 0f), new Vector3(1.8f, 2.8f, 1.8f), new Color(0.45f, 0.52f, 0.48f));
-
-        CreateArenaBlock("Cover_NW", new Vector3(-9.5f, 0.85f, 7.0f), new Vector3(2.8f, 1.7f, 1.0f), new Color(0.38f, 0.44f, 0.40f));
-        CreateArenaBlock("Cover_NE", new Vector3(9.5f, 0.85f, 7.0f), new Vector3(2.8f, 1.7f, 1.0f), new Color(0.38f, 0.44f, 0.40f));
-        CreateArenaBlock("Cover_SW", new Vector3(-9.5f, 0.85f, -7.0f), new Vector3(2.8f, 1.7f, 1.0f), new Color(0.38f, 0.44f, 0.40f));
-        CreateArenaBlock("Cover_SE", new Vector3(9.5f, 0.85f, -7.0f), new Vector3(2.8f, 1.7f, 1.0f), new Color(0.38f, 0.44f, 0.40f));
-
-        CreateArenaBlock("Crate_West", new Vector3(-14.0f, 0.6f, 0f), new Vector3(2.4f, 1.2f, 2.8f), new Color(0.48f, 0.36f, 0.24f));
-        CreateArenaBlock("Crate_East", new Vector3(14.0f, 0.6f, 0f), new Vector3(2.4f, 1.2f, 2.8f), new Color(0.48f, 0.36f, 0.24f));
+        // Build randomized preset + procedural layout inside the arena
+        if (currentArenaLayoutSeed == 0)
+        {
+            currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
+        }
+        RebuildRandomArenaLayout(currentArenaLayoutSeed);
 
         // Spawn the OTHER player's avatar (synced over the network) with accurate hitboxes.
         // Plant player sees the Zombie; Zombie player sees the specific plant that was touched.
@@ -1637,6 +1650,348 @@ public class GridManager : MonoBehaviour
 
         // World-space 3D HP Bar above the opponent (no text sign over their head)
         CreateRemoteWorldHPBar(remoteArenaAvatar.transform, localIsPlant);
+    }
+
+    public void ApplyRemoteArenaSeed(int seed)
+    {
+        currentArenaLayoutSeed = seed;
+        if (isIn3DArena && arena3DRoot != null)
+        {
+            RebuildRandomArenaLayout(seed);
+        }
+    }
+
+    public void RebuildRandomArenaLayout(int seed)
+    {
+        currentArenaLayoutSeed = seed;
+        if (arena3DRoot == null) return;
+
+        if (arenaObstaclesRoot != null)
+        {
+            Destroy(arenaObstaclesRoot);
+            arenaObstaclesRoot = null;
+        }
+
+        arenaObstaclesRoot = new GameObject("ArenaObstacles_Random");
+        arenaObstaclesRoot.transform.SetParent(arena3DRoot.transform, false);
+        arenaObstaclesRoot.transform.localPosition = Vector3.zero;
+
+        System.Random rng = new System.Random(seed);
+
+        // 12 distinct arena presets + procedural scatter and mirroring
+        int presetIndex = rng.Next(0, 12);
+        bool mirrorX = rng.NextDouble() > 0.5;
+        bool mirrorZ = rng.NextDouble() > 0.5;
+
+        // Random color palettes so each preset & seed feels fresh
+        Color[] floorTints = new Color[]
+        {
+            new Color(0.22f, 0.28f, 0.24f), // Mossy Slate
+            new Color(0.26f, 0.24f, 0.30f), // Twilight Dusk
+            new Color(0.28f, 0.26f, 0.21f), // Sand Courtyard
+            new Color(0.19f, 0.25f, 0.30f), // Moonlit Stone
+            new Color(0.25f, 0.22f, 0.22f), // Obsidian Rust
+            new Color(0.20f, 0.29f, 0.27f)  // Jade Garden
+        };
+        if (arenaFloorRenderer != null)
+        {
+            arenaFloorRenderer.material = CreateColoredMaterial(floorTints[rng.Next(0, floorTints.Length)]);
+        }
+
+        Color pillarColor = new Color(
+            0.40f + (float)rng.NextDouble() * 0.16f,
+            0.44f + (float)rng.NextDouble() * 0.16f,
+            0.42f + (float)rng.NextDouble() * 0.16f
+        );
+        Color wallColor = new Color(
+            0.34f + (float)rng.NextDouble() * 0.14f,
+            0.38f + (float)rng.NextDouble() * 0.14f,
+            0.42f + (float)rng.NextDouble() * 0.14f
+        );
+        Color crateColor = new Color(
+            0.46f + (float)rng.NextDouble() * 0.14f,
+            0.33f + (float)rng.NextDouble() * 0.10f,
+            0.20f + (float)rng.NextDouble() * 0.08f
+        );
+        Color accentColor = new Color(
+            0.30f + (float)rng.NextDouble() * 0.22f,
+            0.46f + (float)rng.NextDouble() * 0.20f,
+            0.38f + (float)rng.NextDouble() * 0.22f
+        );
+
+        float mx = mirrorX ? -1f : 1f;
+        float mz = mirrorZ ? -1f : 1f;
+
+        switch (presetIndex)
+        {
+            case 0:
+                currentArenaPresetName = "Crossfire Bastion";
+                // Central split hub with angled wing shields & corner bunkers
+                SpawnRandomObstacle("Center_Bastion_W", new Vector3(-2.6f * mx, 1.3f, 0f), new Vector3(1.6f, 2.6f, 3.6f), 15f * mx, pillarColor, rng);
+                SpawnRandomObstacle("Center_Bastion_E", new Vector3(2.6f * mx, 1.3f, 0f), new Vector3(1.6f, 2.6f, 3.6f), -15f * mx, pillarColor, rng);
+                SpawnRandomObstacle("Wing_NW", new Vector3(-8.5f, 1.0f, 6.2f), new Vector3(4.2f, 2.0f, 1.1f), 28f, wallColor, rng);
+                SpawnRandomObstacle("Wing_NE", new Vector3(8.5f, 1.0f, 6.2f), new Vector3(4.2f, 2.0f, 1.1f), -28f, wallColor, rng);
+                SpawnRandomObstacle("Wing_SW", new Vector3(-8.5f, 1.0f, -6.2f), new Vector3(4.2f, 2.0f, 1.1f), -28f, wallColor, rng);
+                SpawnRandomObstacle("Wing_SE", new Vector3(8.5f, 1.0f, -6.2f), new Vector3(4.2f, 2.0f, 1.1f), 28f, wallColor, rng);
+                SpawnRandomObstacle("Flank_Crate_W", new Vector3(-15.0f, 0.8f, 0f), new Vector3(2.6f, 1.6f, 2.6f), 12f, crateColor, rng);
+                SpawnRandomObstacle("Flank_Crate_E", new Vector3(15.0f, 0.8f, 0f), new Vector3(2.6f, 1.6f, 2.6f), -12f, crateColor, rng);
+                break;
+
+            case 1:
+                currentArenaPresetName = "Twin Fortresses";
+                // Two wide defensive L-bunkers on each half + side pillars
+                SpawnRandomObstacle("Fort_North_Front", new Vector3(0f, 0.95f, 6.8f), new Vector3(6.4f, 1.9f, 1.1f), 0f, wallColor, rng);
+                SpawnRandomObstacle("Fort_South_Front", new Vector3(0f, 0.95f, -6.8f), new Vector3(6.4f, 1.9f, 1.1f), 0f, wallColor, rng);
+                SpawnRandomObstacle("Fort_NW_Side", new Vector3(-5.2f, 1.2f, 8.2f), new Vector3(1.2f, 2.4f, 3.8f), 18f, pillarColor, rng);
+                SpawnRandomObstacle("Fort_NE_Side", new Vector3(5.2f, 1.2f, 8.2f), new Vector3(1.2f, 2.4f, 3.8f), -18f, pillarColor, rng);
+                SpawnRandomObstacle("Fort_SW_Side", new Vector3(-5.2f, 1.2f, -8.2f), new Vector3(1.2f, 2.4f, 3.8f), -18f, pillarColor, rng);
+                SpawnRandomObstacle("Fort_SE_Side", new Vector3(5.2f, 1.2f, -8.2f), new Vector3(1.2f, 2.4f, 3.8f), 18f, pillarColor, rng);
+                SpawnRandomObstacle("Mid_Obelisk_W", new Vector3(-11.5f, 1.6f, 0f), new Vector3(2.2f, 3.2f, 2.2f), 45f, accentColor, rng);
+                SpawnRandomObstacle("Mid_Obelisk_E", new Vector3(11.5f, 1.6f, 0f), new Vector3(2.2f, 3.2f, 2.2f), 45f, accentColor, rng);
+                break;
+
+            case 2:
+                currentArenaPresetName = "Labyrinth Maze";
+                // Interlocking staggered corridor walls for close-quarters juking
+                SpawnRandomObstacle("Maze_C1", new Vector3(-4.5f * mx, 1.35f, 2.5f * mz), new Vector3(6.2f, 2.7f, 1.0f), 0f, wallColor, rng);
+                SpawnRandomObstacle("Maze_C2", new Vector3(4.5f * mx, 1.35f, -2.5f * mz), new Vector3(6.2f, 2.7f, 1.0f), 0f, wallColor, rng);
+                SpawnRandomObstacle("Maze_V1", new Vector3(-8.5f * mx, 1.35f, -4.0f * mz), new Vector3(1.0f, 2.7f, 6.5f), 0f, pillarColor, rng);
+                SpawnRandomObstacle("Maze_V2", new Vector3(8.5f * mx, 1.35f, 4.0f * mz), new Vector3(1.0f, 2.7f, 6.5f), 0f, pillarColor, rng);
+                SpawnRandomObstacle("Maze_Outer_NW", new Vector3(-13.5f, 1.2f, 9.5f), new Vector3(4.8f, 2.4f, 1.2f), 20f, accentColor, rng);
+                SpawnRandomObstacle("Maze_Outer_SE", new Vector3(13.5f, 1.2f, -9.5f), new Vector3(4.8f, 2.4f, 1.2f), 20f, accentColor, rng);
+                SpawnRandomObstacle("Maze_Outer_NE", new Vector3(13.5f, 1.2f, 9.5f), new Vector3(1.2f, 2.4f, 4.8f), -15f, crateColor, rng);
+                SpawnRandomObstacle("Maze_Outer_SW", new Vector3(-13.5f, 1.2f, -9.5f), new Vector3(1.2f, 2.4f, 4.8f), -15f, crateColor, rng);
+                break;
+
+            case 3:
+                currentArenaPresetName = "Colosseum Pillars";
+                // Circular ring of 8 tall pillars + central altar cover
+                SpawnRandomObstacle("Colosseum_Altar", new Vector3(0f, 0.75f, 0f), new Vector3(3.4f, 1.5f, 3.4f), 45f, accentColor, rng);
+                int ringCount = 8;
+                float ringRadius = 9.8f;
+                for (int i = 0; i < ringCount; i++)
+                {
+                    float ang = (i * Mathf.PI * 2f / ringCount) + 0.35f; // offset so north/south spawn sightlines aren't blocked at spawn
+                    Vector3 pos = new Vector3(Mathf.Cos(ang) * ringRadius, 1.65f, Mathf.Sin(ang) * ringRadius);
+                    SpawnRandomObstacle($"Colosseum_Pillar_{i}", pos, new Vector3(1.9f, 3.3f, 1.9f), ang * Mathf.Rad2Deg, pillarColor, rng);
+                }
+                break;
+
+            case 4:
+                currentArenaPresetName = "Three-Lane Trench";
+                // Two long broken lane dividers creating West, Center, and East lanes
+                SpawnRandomObstacle("LaneDiv_W_North", new Vector3(-6.8f, 1.3f, 6.2f), new Vector3(1.2f, 2.6f, 6.8f), 0f, wallColor, rng);
+                SpawnRandomObstacle("LaneDiv_W_South", new Vector3(-6.8f, 1.3f, -6.2f), new Vector3(1.2f, 2.6f, 6.8f), 0f, wallColor, rng);
+                SpawnRandomObstacle("LaneDiv_E_North", new Vector3(6.8f, 1.3f, 6.2f), new Vector3(1.2f, 2.6f, 6.8f), 0f, wallColor, rng);
+                SpawnRandomObstacle("LaneDiv_E_South", new Vector3(6.8f, 1.3f, -6.2f), new Vector3(1.2f, 2.6f, 6.8f), 0f, wallColor, rng);
+                SpawnRandomObstacle("Mid_Bridge_Cover", new Vector3(0f, 0.8f, 0f), new Vector3(4.2f, 1.6f, 1.5f), 25f * mx, crateColor, rng);
+                SpawnRandomObstacle("Side_Bunker_W", new Vector3(-14.5f, 0.95f, 0f), new Vector3(3.2f, 1.9f, 2.0f), 0f, accentColor, rng);
+                SpawnRandomObstacle("Side_Bunker_E", new Vector3(14.5f, 0.95f, 0f), new Vector3(3.2f, 1.9f, 2.0f), 0f, accentColor, rng);
+                break;
+
+            case 5:
+                currentArenaPresetName = "Ancient Ruins";
+                // Asymmetrical fallen monoliths, stepped blocks, and broken arches
+                SpawnRandomObstacle("Ruin_Monolith_1", new Vector3(-3.8f * mx, 1.7f, 3.2f * mz), new Vector3(1.8f, 3.4f, 1.8f), 18f, pillarColor, rng);
+                SpawnRandomObstacle("Ruin_FallenColumn_1", new Vector3(4.5f * mx, 0.65f, 2.0f * mz), new Vector3(5.6f, 1.3f, 1.4f), -32f, wallColor, rng);
+                SpawnRandomObstacle("Ruin_Monolith_2", new Vector3(3.8f * mx, 1.7f, -3.2f * mz), new Vector3(1.8f, 3.4f, 1.8f), -18f, pillarColor, rng);
+                SpawnRandomObstacle("Ruin_FallenColumn_2", new Vector3(-4.5f * mx, 0.65f, -2.0f * mz), new Vector3(5.6f, 1.3f, 1.4f), 32f, wallColor, rng);
+                SpawnRandomObstacle("Ruin_Step_NW", new Vector3(-11.0f, 0.85f, 8.5f), new Vector3(3.5f, 1.7f, 2.4f), 40f, accentColor, rng);
+                SpawnRandomObstacle("Ruin_Step_SE", new Vector3(11.0f, 0.85f, -8.5f), new Vector3(3.5f, 1.7f, 2.4f), 40f, accentColor, rng);
+                SpawnRandomObstacle("Ruin_Step_NE", new Vector3(12.0f, 1.25f, 7.5f), new Vector3(2.4f, 2.5f, 2.4f), 15f, crateColor, rng);
+                SpawnRandomObstacle("Ruin_Step_SW", new Vector3(-12.0f, 1.25f, -7.5f), new Vector3(2.4f, 2.5f, 2.4f), 15f, crateColor, rng);
+                break;
+
+            case 6:
+                currentArenaPresetName = "Diamond Citadel";
+                // 4 angled walls forming a central diamond arena-within-an-arena with 4 entry gaps
+                SpawnRandomObstacle("Diamond_NW", new Vector3(-4.6f, 1.25f, 4.6f), new Vector3(5.5f, 2.5f, 1.0f), -45f, wallColor, rng);
+                SpawnRandomObstacle("Diamond_NE", new Vector3(4.6f, 1.25f, 4.6f), new Vector3(5.5f, 2.5f, 1.0f), 45f, wallColor, rng);
+                SpawnRandomObstacle("Diamond_SW", new Vector3(-4.6f, 1.25f, -4.6f), new Vector3(5.5f, 2.5f, 1.0f), 45f, wallColor, rng);
+                SpawnRandomObstacle("Diamond_SE", new Vector3(4.6f, 1.25f, -4.6f), new Vector3(5.5f, 2.5f, 1.0f), -45f, wallColor, rng);
+                SpawnRandomObstacle("Diamond_Core", new Vector3(0f, 1.5f, 0f), new Vector3(1.8f, 3.0f, 1.8f), 45f, accentColor, rng);
+                SpawnRandomObstacle("Outer_Pillar_W", new Vector3(-14.0f, 1.5f, 0f), new Vector3(2.2f, 3.0f, 2.2f), 0f, pillarColor, rng);
+                SpawnRandomObstacle("Outer_Pillar_E", new Vector3(14.0f, 1.5f, 0f), new Vector3(2.2f, 3.0f, 2.2f), 0f, pillarColor, rng);
+                break;
+
+            case 7:
+                currentArenaPresetName = "Cargo Crate Yard";
+                // Clusters of industrial shipping containers & stacked crates
+                SpawnCrateCluster("Cluster_Center_W", new Vector3(-4.8f * mx, 0f, 1.5f * mz), crateColor, pillarColor, rng);
+                SpawnCrateCluster("Cluster_Center_E", new Vector3(4.8f * mx, 0f, -1.5f * mz), crateColor, pillarColor, rng);
+                SpawnCrateCluster("Cluster_NW", new Vector3(-11.5f, 0f, 7.5f), crateColor, accentColor, rng);
+                SpawnCrateCluster("Cluster_NE", new Vector3(11.5f, 0f, 7.5f), crateColor, accentColor, rng);
+                SpawnCrateCluster("Cluster_SW", new Vector3(-11.5f, 0f, -7.5f), crateColor, accentColor, rng);
+                SpawnCrateCluster("Cluster_SE", new Vector3(11.5f, 0f, -7.5f), crateColor, accentColor, rng);
+                break;
+
+            case 8:
+                currentArenaPresetName = "Chevron Gauntlet";
+                // V-shaped chevron shields pointing toward the center
+                SpawnRandomObstacle("Chev_N_Left", new Vector3(-3.2f, 1.15f, 5.8f), new Vector3(4.8f, 2.3f, 1.0f), 28f, wallColor, rng);
+                SpawnRandomObstacle("Chev_N_Right", new Vector3(3.2f, 1.15f, 5.8f), new Vector3(4.8f, 2.3f, 1.0f), -28f, wallColor, rng);
+                SpawnRandomObstacle("Chev_S_Left", new Vector3(-3.2f, 1.15f, -5.8f), new Vector3(4.8f, 2.3f, 1.0f), -28f, wallColor, rng);
+                SpawnRandomObstacle("Chev_S_Right", new Vector3(3.2f, 1.15f, -5.8f), new Vector3(4.8f, 2.3f, 1.0f), 28f, wallColor, rng);
+                SpawnRandomObstacle("Gauntlet_Mid_W", new Vector3(-9.5f, 1.4f, 0f), new Vector3(2.2f, 2.8f, 4.4f), 0f, pillarColor, rng);
+                SpawnRandomObstacle("Gauntlet_Mid_E", new Vector3(9.5f, 1.4f, 0f), new Vector3(2.2f, 2.8f, 4.4f), 0f, pillarColor, rng);
+                break;
+
+            case 9:
+                currentArenaPresetName = "Spiral Sanctuary";
+                // Pinwheel / spiral blades radiating from the center
+                for (int b = 0; b < 4; b++)
+                {
+                    float baseAng = b * 90f + (mirrorX ? 32f : -32f);
+                    float rad = baseAng * Mathf.Deg2Rad;
+                    Vector3 pos = new Vector3(Mathf.Cos(rad) * 6.5f, 1.25f, Mathf.Sin(rad) * 6.5f);
+                    SpawnRandomObstacle($"Spiral_Blade_{b}", pos, new Vector3(6.0f, 2.5f, 1.1f), baseAng + 35f, wallColor, rng);
+                }
+                SpawnRandomObstacle("Spiral_Outer_NW", new Vector3(-13.0f, 1.1f, 9.0f), new Vector3(2.6f, 2.2f, 2.6f), 20f, accentColor, rng);
+                SpawnRandomObstacle("Spiral_Outer_NE", new Vector3(13.0f, 1.1f, 9.0f), new Vector3(2.6f, 2.2f, 2.6f), -20f, accentColor, rng);
+                SpawnRandomObstacle("Spiral_Outer_SW", new Vector3(-13.0f, 1.1f, -9.0f), new Vector3(2.6f, 2.2f, 2.6f), -20f, accentColor, rng);
+                SpawnRandomObstacle("Spiral_Outer_SE", new Vector3(13.0f, 1.1f, -9.0f), new Vector3(2.6f, 2.2f, 2.6f), 20f, accentColor, rng);
+                break;
+
+            case 10:
+                currentArenaPresetName = "Checkered Bunkers";
+                // Grid of alternating low cover cubes and tall pillars
+                float[] xs = new float[] { -12f, -4.5f, 4.5f, 12f };
+                float[] zs = new float[] { -6.5f, 0f, 6.5f };
+                int idx = 0;
+                for (int ix = 0; ix < xs.Length; ix++)
+                {
+                    for (int iz = 0; iz < zs.Length; iz++)
+                    {
+                        idx++;
+                        if ((ix + iz) % 2 == 0)
+                        {
+                            SpawnRandomObstacle($"Checker_Pillar_{idx}", new Vector3(xs[ix], 1.55f, zs[iz]), new Vector3(1.8f, 3.1f, 1.8f), 15f * idx, pillarColor, rng);
+                        }
+                        else
+                        {
+                            SpawnRandomObstacle($"Checker_Low_{idx}", new Vector3(xs[ix], 0.75f, zs[iz]), new Vector3(3.0f, 1.5f, 1.4f), -20f * idx, crateColor, rng);
+                        }
+                    }
+                }
+                break;
+
+            default:
+                currentArenaPresetName = "Wildcard Chaos";
+                // Purely procedural high-density mixed layout
+                break;
+        }
+
+        // Additional procedural random obstacles scattered in every preset (more in Wildcard Chaos)
+        // Guarantees every single match has a genuinely random layout even within the same preset!
+        int extraCount = (presetIndex == 11) ? rng.Next(18, 25) : rng.Next(8, 14);
+        for (int i = 0; i < extraCount; i++)
+        {
+            float rx = -17.5f + (float)rng.NextDouble() * 35.0f;
+            float rz = -16.5f + (float)rng.NextDouble() * 33.0f;
+
+            if (!IsArenaPositionSafeFromSpawns(rx, rz, 4.6f))
+            {
+                continue;
+            }
+
+            int shapeKind = rng.Next(0, 5);
+            float yaw = (float)rng.NextDouble() * 360f;
+            Color col = (shapeKind == 0) ? pillarColor
+                      : (shapeKind == 1) ? wallColor
+                      : (shapeKind == 2) ? crateColor
+                      : accentColor;
+
+            if (shapeKind == 0)
+            {
+                // Tall Pillar
+                float w = 1.4f + (float)rng.NextDouble() * 1.1f;
+                float h = 2.4f + (float)rng.NextDouble() * 1.3f;
+                CreateRandomObstacleBlock($"Proc_Pillar_{i}", new Vector3(rx, h * 0.5f, rz), new Vector3(w, h, w), yaw, col);
+            }
+            else if (shapeKind == 1)
+            {
+                // Angled Tactical Wall
+                float len = 3.0f + (float)rng.NextDouble() * 2.8f;
+                float h = 1.6f + (float)rng.NextDouble() * 1.0f;
+                CreateRandomObstacleBlock($"Proc_Wall_{i}", new Vector3(rx, h * 0.5f, rz), new Vector3(len, h, 0.95f), yaw, col);
+            }
+            else if (shapeKind == 2)
+            {
+                // Low Cover Barrier (can jump or shoot over)
+                float len = 2.4f + (float)rng.NextDouble() * 2.0f;
+                float h = 0.95f + (float)rng.NextDouble() * 0.45f;
+                CreateRandomObstacleBlock($"Proc_Barrier_{i}", new Vector3(rx, h * 0.5f, rz), new Vector3(len, h, 1.3f), yaw, col);
+            }
+            else if (shapeKind == 3)
+            {
+                // Heavy Crate Box
+                float s = 1.6f + (float)rng.NextDouble() * 1.2f;
+                float h = 1.2f + (float)rng.NextDouble() * 0.9f;
+                CreateRandomObstacleBlock($"Proc_Crate_{i}", new Vector3(rx, h * 0.5f, rz), new Vector3(s, h, s), yaw, col);
+            }
+            else
+            {
+                // Double Stacked Crate
+                float s = 1.8f + (float)rng.NextDouble() * 0.8f;
+                CreateRandomObstacleBlock($"Proc_StackBase_{i}", new Vector3(rx, 0.65f, rz), new Vector3(s, 1.3f, s), yaw, crateColor);
+                CreateRandomObstacleBlock($"Proc_StackTop_{i}", new Vector3(rx + 0.15f, 1.75f, rz - 0.1f), new Vector3(s * 0.72f, 0.9f, s * 0.72f), yaw + 28f, accentColor);
+            }
+        }
+    }
+
+    private void SpawnCrateCluster(string prefix, Vector3 baseLocalPos, Color primaryCol, Color secondaryCol, System.Random rng)
+    {
+        float jx = ((float)rng.NextDouble() - 0.5f) * 1.4f;
+        float jz = ((float)rng.NextDouble() - 0.5f) * 1.4f;
+        Vector3 p = new Vector3(baseLocalPos.x + jx, 0f, baseLocalPos.z + jz);
+        if (!IsArenaPositionSafeFromSpawns(p.x, p.z, 4.2f)) return;
+
+        float yaw = (float)rng.NextDouble() * 360f;
+        CreateRandomObstacleBlock(prefix + "_Main", new Vector3(p.x, 0.85f, p.z), new Vector3(2.4f, 1.7f, 2.4f), yaw, primaryCol);
+        CreateRandomObstacleBlock(prefix + "_Side", new Vector3(p.x + 1.6f, 0.55f, p.z + 0.6f), new Vector3(1.4f, 1.1f, 1.5f), yaw + 22f, secondaryCol);
+        if (rng.NextDouble() > 0.35)
+        {
+            CreateRandomObstacleBlock(prefix + "_Top", new Vector3(p.x - 0.2f, 2.15f, p.z + 0.1f), new Vector3(1.3f, 0.9f, 1.3f), yaw - 30f, secondaryCol);
+        }
+    }
+
+    private void SpawnRandomObstacle(string name, Vector3 localPos, Vector3 scale, float baseYaw, Color color, System.Random rng)
+    {
+        // Add subtle organic position & rotation jitter so even presets have random variations
+        float jx = ((float)rng.NextDouble() - 0.5f) * 1.2f;
+        float jz = ((float)rng.NextDouble() - 0.5f) * 1.2f;
+        float jYaw = ((float)rng.NextDouble() - 0.5f) * 16.0f;
+
+        Vector3 finalPos = new Vector3(localPos.x + jx, localPos.y, localPos.z + jz);
+        if (!IsArenaPositionSafeFromSpawns(finalPos.x, finalPos.z, 4.0f))
+        {
+            return;
+        }
+
+        CreateRandomObstacleBlock(name, finalPos, scale, baseYaw + jYaw, color);
+    }
+
+    private bool IsArenaPositionSafeFromSpawns(float localX, float localZ, float minClearance)
+    {
+        // Plant spawns at local (0, *, -12) and Zombie spawns at local (0, *, +12)
+        Vector2 pt = new Vector2(localX, localZ);
+        if (Vector2.Distance(pt, new Vector2(0f, -12.0f)) < minClearance) return false;
+        if (Vector2.Distance(pt, new Vector2(0f, 12.0f)) < minClearance) return false;
+        // Also keep inside the 44x44 perimeter walls
+        if (Mathf.Abs(localX) > 19.2f || Mathf.Abs(localZ) > 19.2f) return false;
+        return true;
+    }
+
+    private void CreateRandomObstacleBlock(string name, Vector3 localPos, Vector3 scale, float yawDegrees, Color color)
+    {
+        Transform parent = (arenaObstaclesRoot != null) ? arenaObstaclesRoot.transform : arena3DRoot.transform;
+        GameObject block = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        block.name = name;
+        block.transform.SetParent(parent, false);
+        block.transform.localPosition = localPos;
+        block.transform.localRotation = Quaternion.Euler(0f, yawDegrees, 0f);
+        block.transform.localScale = scale;
+        block.GetComponent<Renderer>().material = CreateColoredMaterial(color);
     }
 
     private void CreateRemoteWorldHPBar(Transform parent, bool opponentIsZombie)
@@ -2541,8 +2896,8 @@ public class GridManager : MonoBehaviour
         };
         arenaHud.normal.textColor = Color.white;
         GUI.backgroundColor = new Color(0.10f, 0.14f, 0.22f, 0.88f);
-        GUI.Box(new Rect(cx - 310f, 12f, 620f, 54f),
-            $"3D 1v1 ARENA • {abilityHint}\nWASD: Move | Space: Jump | Hits Connected: {arenaHitsLanded} | Host: N = Zombie Won, M = Plant Won",
+        GUI.Box(new Rect(cx - 325f, 12f, 650f, 54f),
+            $"3D 1v1 ARENA ({currentArenaPresetName}) • {abilityHint}\nWASD: Move | Space: Jump | R: Reroll Layout | Hits: {arenaHitsLanded} | Host: N/M = Win",
             arenaHud);
 
         // 2. Top-Left & Top-Right HP Bars for Local Player and Opponent
