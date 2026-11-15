@@ -5,6 +5,8 @@ public class PlayerController : MonoBehaviour
 {
     private CharacterController controller;
     private Vector3 playerVelocity;
+    private Vector3 externalKnockbackVelocity = Vector3.zero;
+    private bool suppressNextLandingSlow = false;
     private bool groundedPlayer;
     private bool wasGroundedLastFrame = true;
     private float airborneTime = 0f;
@@ -91,6 +93,8 @@ public class PlayerController : MonoBehaviour
         controller.enabled = true;
 
         playerVelocity = Vector3.zero;
+        externalKnockbackVelocity = Vector3.zero;
+        suppressNextLandingSlow = false;
         wasGroundedLastFrame = true;
         airborneTime = 0f;
         landingSlowTimer = 0f;
@@ -125,6 +129,8 @@ public class PlayerController : MonoBehaviour
     public void ExitFirstPersonArena()
     {
         isFirstPersonArenaActive = false;
+        externalKnockbackVelocity = Vector3.zero;
+        suppressNextLandingSlow = false;
         isDurianRolling = false;
         isBunnySliding = false;
         isFeralLunging = false;
@@ -163,6 +169,18 @@ public class PlayerController : MonoBehaviour
     {
         parrySpeedBonusMultiplier = Mathf.Max(parrySpeedBonusMultiplier, bonusMultiplier);
         parrySpeedBonusTimer = duration;
+    }
+
+    public void ApplyKnockback(Vector3 horizontalVelocity, float upwardVelocity, bool suppressLandingSlow = false)
+    {
+        externalKnockbackVelocity = new Vector3(horizontalVelocity.x, 0f, horizontalVelocity.z);
+        playerVelocity.y = Mathf.Max(playerVelocity.y, upwardVelocity);
+        groundedPlayer = false;
+        wasGroundedLastFrame = false;
+        if (suppressLandingSlow)
+        {
+            suppressNextLandingSlow = true;
+        }
     }
 
     private void Update()
@@ -231,8 +249,19 @@ public class PlayerController : MonoBehaviour
         // Detect Landing Impact: Player was airborne and just touched the ground
         if (!wasGroundedLastFrame && groundedPlayer && airborneTime > 0.12f)
         {
-            landingSlowTimer = landingSlowDuration; // 0.5 second slowdown timer
+            if (suppressNextLandingSlow)
+            {
+                suppressNextLandingSlow = false;
+            }
+            else
+            {
+                landingSlowTimer = landingSlowDuration; // 0.5 second slowdown timer
+            }
             landingCameraDip = -0.18f;              // Subtle physical camera dip on impact
+        }
+        else if (groundedPlayer)
+        {
+            suppressNextLandingSlow = false;
         }
 
         if (groundedPlayer)
@@ -242,10 +271,19 @@ public class PlayerController : MonoBehaviour
             {
                 playerVelocity.y = -2f;
             }
+            if (externalKnockbackVelocity.sqrMagnitude > 0.0025f && playerVelocity.y <= 0f)
+            {
+                externalKnockbackVelocity = Vector3.Lerp(externalKnockbackVelocity, Vector3.zero, Time.deltaTime * 10.0f);
+                if (externalKnockbackVelocity.sqrMagnitude <= 0.0025f) externalKnockbackVelocity = Vector3.zero;
+            }
         }
         else
         {
             airborneTime += Time.deltaTime;
+            if (externalKnockbackVelocity.sqrMagnitude > 0.0025f)
+            {
+                externalKnockbackVelocity = Vector3.Lerp(externalKnockbackVelocity, Vector3.zero, Time.deltaTime * 2.4f);
+            }
         }
         wasGroundedLastFrame = groundedPlayer;
 
@@ -346,8 +384,8 @@ public class PlayerController : MonoBehaviour
         // Apply Gravity
         playerVelocity.y += gravityValue * Time.deltaTime;
 
-        // Combine horizontal movement and vertical velocity into a single Move call
-        Vector3 finalMove = (moveDir * currentSpeed) + new Vector3(0f, playerVelocity.y, 0f);
+        // Combine horizontal movement, knockback impulse, and vertical velocity into a single Move call
+        Vector3 finalMove = (moveDir * currentSpeed) + new Vector3(externalKnockbackVelocity.x, playerVelocity.y, externalKnockbackVelocity.z);
         controller.Move(finalMove * Time.deltaTime);
 
         // Update First-Person Camera Position, FOV & Tilt

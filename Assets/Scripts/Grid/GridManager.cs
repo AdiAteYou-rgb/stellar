@@ -120,14 +120,15 @@ public class GridManager : MonoBehaviour
     public event Action<int, Vector3, float, int> OnSkyMoonSpawnedLocal;      // id, startPos, landingY, value
     public event Action<int, Vector3, int> OnFlowerMoonSpawnedLocal;           // id, flowerPos, value
     public event Action<System.Collections.Generic.List<int>> OnMoonsCollectedLocal;
-    public event Action<int, int, PlantType, MultiplayerMenuManager.PlayerRole, ZombieType> OnClashStartedLocal; // plant row, col, plantType, senderRole, zombieType
-    public event Action<Vector3, float, int> OnArenaPoseLocal;                 // position, yaw, stateFlags (bit1=BunnySlide, bit2=BucketParry, bit3=ParrySpeed)
-    public event Action<bool> OnArenaResolvedLocal;                            // true = zombie won
+    public event Action<int, int, PlantType, MultiplayerMenuManager.PlayerRole, ZombieType, int> OnClashStartedLocal; // plant row, col, plantType, senderRole, zombieType, clashId
+    public event Action<Vector3, float, int, int> OnArenaPoseLocal;            // position, yaw, stateFlags, clashId
+    public event Action<bool, int, int, int> OnArenaResolvedLocal;             // zombieWon, row, col, clashId
     public event Action<float> OnArenaStunLocal;                               // duration in seconds (Durian immobilize)
     public event Action<string, Vector3, Vector3> OnArenaAbilityFxLocal;       // fxType, startPos, endPos
     public event Action<int> OnArenaSeedLocal;                                 // synced random seed for 3D arena layout
     public event Action<int, float> OnArenaAttackHitLocal;                     // damage, stunDuration
     public event Action<int, int> OnArenaParriedLocal;                         // blockedDamage, restoredHP
+    public event Action<Vector3> OnArenaKnockbackLocal;                        // knockbackVelocity (x, y, z)
 
     private int nextMoonId = 1;
     public bool IsIn3DArena => isIn3DArena;
@@ -148,6 +149,12 @@ public class GridManager : MonoBehaviour
     private GameObject arenaObstaclesRoot;
     private Renderer arenaFloorRenderer;
     private int currentArenaLayoutSeed = 0;
+    private int currentClashId = 0;
+    private readonly System.Collections.Generic.HashSet<int> activeClashIds = new System.Collections.Generic.HashSet<int>();
+    private readonly System.Collections.Generic.HashSet<int> resolvedClashIds = new System.Collections.Generic.HashSet<int>();
+    private float lastArenaExitUnscaledTime = -999f;
+    private int lastResolvedPlantRow = -1;
+    private int lastResolvedPlantCol = -1;
     private string currentArenaPresetName = "Random";
     private Vector3 remoteArenaTargetPos;
     private float remoteArenaTargetYaw;
@@ -175,10 +182,12 @@ public class GridManager : MonoBehaviour
     private float arenaSecondaryCooldownTimer = 0f; // Special ability cooldown
     private float arenaSecondaryMaxCooldown = 5.0f;
 
-    private bool isChargingMoonBeam = false;
-    private float moonBeamChargeTimer = 0f;
-    public float moonBeamChargeDuration = 1.6f;
-    private GameObject localMoonChargeOrb;
+    // Moonflower Outburst (Illari-style solar explosion: 20 dmg, 10s cooldown, knocks Moonflower & Zombie back and up)
+    public float moonflowerBurstCooldown = 10.0f;
+    public int moonflowerBurstDamage = 20;
+    public float moonflowerBurstRadius = 4.6f;
+    [HideInInspector] public float moonBeamChargeDuration = 1.6f;
+    private Vector3 soloBotKnockbackVelocity = Vector3.zero;
 
     private bool isChargingRoseThorn = false;
     private float roseThornChargeTimer = 0f;
@@ -242,6 +251,14 @@ public class GridManager : MonoBehaviour
     private PlayerController cachedPlayerController;
     private float clashRetrySendTimer = 0f;
     private bool localInitiatedCurrentClash = false;
+
+    [Header("2D Scene Background Music")]
+    public AudioClip backgroundMusic2D;
+    [Range(0f, 1f)] public float backgroundMusicVolume = 0.65f;
+    private AudioSource backgroundMusic2DSource;
+    private bool music2DStarted = false;
+    private bool music2DPaused = false;
+    private float music2DSavedTime = 0f;
 
     // Top-left UI layout rects (Moon Bank + 3 Plant Buttons + Brain Bank + 3 Zombie Buttons)
     private readonly Rect moonBankRect = new Rect(12f, 12f, 106f, 66f);
@@ -512,6 +529,8 @@ public class GridManager : MonoBehaviour
             return;
         }
 
+        Update2DBackgroundMusic();
+
         if (placedPlants == null || placedPlants.GetLength(0) != rows || placedPlants.GetLength(1) != columns)
         {
             InitializeRuntimeGrid();
@@ -779,6 +798,24 @@ public class GridManager : MonoBehaviour
         return localRole;
     }
 
+    private WallZombie FindClosestZombieInRow(int row, Vector3 refPos)
+    {
+        WallZombie best = null;
+        float bestDist = float.MaxValue;
+        for (int i = 0; i < WallZombie.ActiveZombies.Count; i++)
+        {
+            WallZombie z = WallZombie.ActiveZombies[i];
+            if (z == null || !z.gameObject.activeInHierarchy || z.row != row) continue;
+            float d = Mathf.Abs(z.transform.position.x - refPos.x);
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = z;
+            }
+        }
+        return best;
+    }
+
     public void TriggerZombiePlantClash(WallZombie zombie, PlaceholderPlant plant, bool notifyNetwork = true)
     {
         PlantType pType = (plant != null) ? plant.plantType : PlantType.Rose;
@@ -804,10 +841,13 @@ public class GridManager : MonoBehaviour
 
         if (notifyNetwork)
         {
+            currentClashId = UnityEngine.Random.Range(100000, 999999999);
+            activeClashIds.Clear();
+            activeClashIds.Add(currentClashId);
             localInitiatedCurrentClash = true;
             clashRetrySendTimer = 0.22f;
             currentArenaLayoutSeed = UnityEngine.Random.Range(1000, 9999999);
-            OnClashStartedLocal?.Invoke(r, c, pType, GetEffectiveLocalRole(), zType);
+            OnClashStartedLocal?.Invoke(r, c, pType, GetEffectiveLocalRole(), zType, currentClashId);
             OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
         }
         else
@@ -827,6 +867,10 @@ public class GridManager : MonoBehaviour
 
         clashingZombie = zombie;
         clashingPlant = plant;
+        if (zombie != null)
+        {
+            zombie.MarkClashResolved();
+        }
 
         // 2. Begin smooth camera zoom into the colliding Zombie & Plant
         if (targetCamera == null) targetCamera = Camera.main;
@@ -848,16 +892,21 @@ public class GridManager : MonoBehaviour
     /// <summary>Called when the other player reports a clash, so both players enter the 3D arena together.</summary>
     public void TriggerRemoteClash(int row, int col)
     {
-        TriggerRemoteClash(row, col, PlantType.Rose, MultiplayerMenuManager.PlayerRole.None, ZombieType.Normal);
+        TriggerRemoteClash(row, col, PlantType.Rose, MultiplayerMenuManager.PlayerRole.None, ZombieType.Normal, 0);
     }
 
-    public void TriggerRemoteClash(int row, int col, PlantType plantType, MultiplayerMenuManager.PlayerRole remoteInitiatorRole = MultiplayerMenuManager.PlayerRole.None, ZombieType zombieType = ZombieType.Normal)
+    public void TriggerRemoteClash(int row, int col, PlantType plantType, MultiplayerMenuManager.PlayerRole remoteInitiatorRole = MultiplayerMenuManager.PlayerRole.None, ZombieType zombieType = ZombieType.Normal, int clashId = 0)
     {
+        if (clashId != 0 && resolvedClashIds.Contains(clashId))
+        {
+            return;
+        }
+        if (clashId == 0 && (Time.unscaledTime - lastArenaExitUnscaledTime) < 0.75f && row == lastResolvedPlantRow && col == lastResolvedPlantCol)
+        {
+            return;
+        }
+
         gameplayActive = true;
-        clashingPlantRow = row;
-        clashingPlantCol = col;
-        clashingPlantType = plantType;
-        clashingZombieType = zombieType;
 
         // Auto-reconcile local role if remote role was specified
         if (remoteInitiatorRole == MultiplayerMenuManager.PlayerRole.Zombie)
@@ -875,26 +924,59 @@ public class GridManager : MonoBehaviour
             plant = placedPlants[row, col];
         }
 
-        // Find the zombie in that row closest to the plant
-        WallZombie best = null;
-        float bestDist = float.MaxValue;
         Vector3 refPos = plant != null ? plant.transform.position : GetTileWorldPosition(row, col, 0f);
-        for (int i = 0; i < WallZombie.ActiveZombies.Count; i++)
+        WallZombie best = FindClosestZombieInRow(row, refPos);
+
+        // If already in zoom or 3D (e.g., simultaneous clash detection or APOSE arrived before CLASH),
+        // bind missing clash metadata without resetting an active duel.
+        if (is2DWorldPaused || isZoomingIntoClash || isIn3DArena)
         {
-            WallZombie z = WallZombie.ActiveZombies[i];
-            if (z == null || z.row != row) continue;
-            float d = Mathf.Abs(z.transform.position.x - refPos.x);
-            if (d < bestDist) { bestDist = d; best = z; }
+            if (matchResult != MatchResult.InProgress || arenaResolving)
+            {
+                return;
+            }
+
+            if (clashId != 0)
+            {
+                activeClashIds.Add(clashId);
+                if (currentClashId == 0) currentClashId = clashId;
+            }
+            bool wasMissingMetadata = clashingPlantRow < 0;
+            if (wasMissingMetadata)
+            {
+                clashingPlantRow = row;
+                clashingPlantCol = col;
+                clashingPlantType = plantType;
+                clashingZombieType = (best != null) ? best.zombieType : zombieType;
+            }
+            if (clashingPlant == null && plant != null)
+            {
+                clashingPlant = plant;
+            }
+            if (clashingZombie == null && best != null)
+            {
+                clashingZombie = best;
+                clashingZombieType = best.zombieType;
+                best.MarkClashResolved();
+            }
+            if (wasMissingMetadata && isIn3DArena && arenaHitsLanded == 0)
+            {
+                Enter3D1v1Arena();
+            }
+            return;
         }
 
-        if (best != null)
+        currentClashId = clashId;
+        activeClashIds.Clear();
+        if (clashId != 0)
         {
-            clashingZombieType = best.zombieType;
+            activeClashIds.Add(clashId);
         }
-        else
-        {
-            clashingZombieType = zombieType;
-        }
+
+        clashingPlantRow = row;
+        clashingPlantCol = col;
+        clashingPlantType = plantType;
+        clashingZombieType = (best != null) ? best.zombieType : zombieType;
 
         TriggerZombiePlantClash(best, plant, plantType, notifyNetwork: false);
     }
@@ -905,13 +987,13 @@ public class GridManager : MonoBehaviour
         float t = Mathf.Clamp01(clashZoomTimer / Mathf.Max(0.1f, clashZoomDuration));
         float smoothT = Mathf.SmoothStep(0f, 1f, t);
 
-        if (localInitiatedCurrentClash && !hasRemoteArenaPose)
+        if (localInitiatedCurrentClash && !hasRemoteArenaPose && !arenaResolving)
         {
             clashRetrySendTimer -= Time.deltaTime;
             if (clashRetrySendTimer <= 0f)
             {
                 clashRetrySendTimer = 0.25f;
-                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole(), clashingZombieType);
+                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole(), clashingZombieType, currentClashId);
                 OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
             }
         }
@@ -961,6 +1043,7 @@ public class GridManager : MonoBehaviour
         isIn3DArena = true;
         arenaResolving = false;
         arenaPoseSendTimer = 0f;
+        Pause2DMusic();
 
         MultiplayerMenuManager.PlayerRole myRole = GetEffectiveLocalRole();
         bool isZombie = myRole == MultiplayerMenuManager.PlayerRole.Zombie;
@@ -981,8 +1064,7 @@ public class GridManager : MonoBehaviour
         remoteImmobilizedTimer = 0f;
         arenaAbilityCooldownTimer = 0f;
         arenaSecondaryCooldownTimer = 0f;
-        isChargingMoonBeam = false;
-        moonBeamChargeTimer = 0f;
+        arenaSecondaryMaxCooldown = (!isZombie && activePlant == PlantType.Moonflower) ? moonflowerBurstCooldown : 5.0f;
         isChargingRoseThorn = false;
         roseThornChargeTimer = 0f;
         isDurianRollingLocal = false;
@@ -998,6 +1080,7 @@ public class GridManager : MonoBehaviour
         remoteIsBucketParrying = false;
         remoteHasParrySpeedBuff = false;
         remoteIsFeralLunging = false;
+        soloBotKnockbackVelocity = Vector3.zero;
         soloBotActionTimer = 2.2f;
 
         // Ensure 3D Arena environment exists with the remote opponent avatar (Plant or Zombie)
@@ -1066,14 +1149,32 @@ public class GridManager : MonoBehaviour
     private static readonly Vector3 ArenaZombieSpawn = new Vector3(0f, 1.5f, -14.0f);
 
     /// <summary>Host decides the 1v1 result (N = zombie won, M = plant won) or triggered automatically when HP hits 0.</summary>
-    public void ResolveArena(bool zombieWon, bool notifyNetwork = true)
+    public void ResolveArena(bool zombieWon, bool notifyNetwork = true, int resolvedRow = -1, int resolvedCol = -1, int clashId = 0)
     {
+        if (clashId != 0 && resolvedClashIds.Contains(clashId)) return;
         if (arenaResolving) return;
         if (!isIn3DArena && !isZoomingIntoClash) return;
 
+        if (clashingPlantRow < 0 && resolvedRow >= 0)
+        {
+            clashingPlantRow = resolvedRow;
+            clashingPlantCol = resolvedCol;
+            if (clashingPlant == null && placedPlants != null && resolvedRow < rows && resolvedCol >= 0 && resolvedCol < columns)
+            {
+                clashingPlant = placedPlants[resolvedRow, resolvedCol];
+            }
+        }
+
+        if (currentClashId != 0) resolvedClashIds.Add(currentClashId);
+        foreach (int id in activeClashIds) resolvedClashIds.Add(id);
+        if (clashId != 0) resolvedClashIds.Add(clashId);
+        lastResolvedPlantRow = clashingPlantRow;
+        lastResolvedPlantCol = clashingPlantCol;
+
         if (notifyNetwork)
         {
-            OnArenaResolvedLocal?.Invoke(zombieWon);
+            int sendClashId = (clashId != 0) ? clashId : currentClashId;
+            OnArenaResolvedLocal?.Invoke(zombieWon, clashingPlantRow, clashingPlantCol, sendClashId);
         }
 
         if (isZoomingIntoClash)
@@ -1097,13 +1198,15 @@ public class GridManager : MonoBehaviour
 
         if (arenaZombieWon)
         {
-            // Zombie won: the targeted plant is removed, the zombie keeps walking
+            // Zombie won: remove the defeated plant immediately and let the surviving zombie resume marching & clashing
             if (clashingPlantRow >= 0 && clashingPlantRow < rows && clashingPlantCol >= 0 && clashingPlantCol < columns)
             {
                 if (placedPlants != null && placedPlants[clashingPlantRow, clashingPlantCol] != null)
                 {
-                    Destroy(placedPlants[clashingPlantRow, clashingPlantCol].gameObject);
+                    GameObject deadPlantObj = placedPlants[clashingPlantRow, clashingPlantCol].gameObject;
                     placedPlants[clashingPlantRow, clashingPlantCol] = null;
+                    deadPlantObj.SetActive(false);
+                    Destroy(deadPlantObj);
                 }
             }
             if (clashingPlant != null)
@@ -1113,9 +1216,23 @@ public class GridManager : MonoBehaviour
                 {
                     placedPlants[r, c] = null;
                 }
-                Destroy(clashingPlant.gameObject);
+                GameObject cpObj = clashingPlant.gameObject;
                 clashingPlant = null;
+                cpObj.SetActive(false);
+                Destroy(cpObj);
             }
+
+            WallZombie survivingZombie = clashingZombie;
+            if (survivingZombie == null && clashingPlantRow >= 0)
+            {
+                Vector3 refPos = GetTileWorldPosition(clashingPlantRow, Mathf.Max(0, clashingPlantCol), 0f);
+                survivingZombie = FindClosestZombieInRow(clashingPlantRow, refPos);
+            }
+            if (survivingZombie != null)
+            {
+                survivingZombie.ResetForNextClash();
+            }
+
             Exit3DArenaBackTo2DWall(destroyZombie: false);
         }
         else
@@ -1128,6 +1245,12 @@ public class GridManager : MonoBehaviour
 
     private void UpdateArenaNetworking()
     {
+        // Stop broadcasting APOSE & CLASH retries immediately once a winner is chosen so late packets never re-open the arena
+        if (arenaResolving)
+        {
+            return;
+        }
+
         // If we initiated the clash and the remote player hasn't sent a pose yet, resend CLASH & ASEED periodically so they are guaranteed to enter the 3D scene
         if (localInitiatedCurrentClash && !hasRemoteArenaPose)
         {
@@ -1135,7 +1258,7 @@ public class GridManager : MonoBehaviour
             if (clashRetrySendTimer <= 0f)
             {
                 clashRetrySendTimer = 0.35f;
-                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole(), clashingZombieType);
+                OnClashStartedLocal?.Invoke(clashingPlantRow, clashingPlantCol, clashingPlantType, GetEffectiveLocalRole(), clashingZombieType, currentClashId);
                 OnArenaSeedLocal?.Invoke(currentArenaLayoutSeed);
             }
         }
@@ -1151,7 +1274,7 @@ public class GridManager : MonoBehaviour
             if (isBucketParryingLocal) stateFlags |= 2;
             if (pc.parrySpeedBonusTimer > 0f) stateFlags |= 4;
             if (isFeralLungingLocal) stateFlags |= 8;
-            OnArenaPoseLocal?.Invoke(pc.transform.position, pc.transform.eulerAngles.y, stateFlags);
+            OnArenaPoseLocal?.Invoke(pc.transform.position, pc.transform.eulerAngles.y, stateFlags, currentClashId);
         }
 
         // Smoothly move the remote avatar towards the latest received pose (unless immobilized by Durian)
@@ -1243,14 +1366,38 @@ public class GridManager : MonoBehaviour
         }
     }
 
-    public void SetRemoteArenaPose(Vector3 pos, float yaw, int stateFlags = 0)
+    public void SetRemoteArenaPose(Vector3 pos, float yaw, int stateFlags = 0, int clashId = 0)
     {
-        // If we started receiving 3D arena poses from the remote player before CLASH arrived, immediately enter the 3D arena!
+        if (arenaResolving)
+        {
+            return;
+        }
+        if (clashId != 0 && resolvedClashIds.Contains(clashId))
+        {
+            return;
+        }
+
+        // Never re-open the 3D arena from late/in-flight APOSE packets right after finishing a duel
         if (!isIn3DArena && !isZoomingIntoClash)
         {
+            if ((Time.unscaledTime - lastArenaExitUnscaledTime) < 2.5f)
+            {
+                return;
+            }
+
             gameplayActive = true;
             is2DWorldPaused = true;
+            if (clashId != 0)
+            {
+                currentClashId = clashId;
+                activeClashIds.Add(clashId);
+            }
             Enter3D1v1Arena();
+        }
+        else if (clashId != 0)
+        {
+            activeClashIds.Add(clashId);
+            if (currentClashId == 0) currentClashId = clashId;
         }
 
         remoteArenaTargetPos = pos;
@@ -1312,6 +1459,20 @@ public class GridManager : MonoBehaviour
         }
     }
 
+    public void ApplyRemoteArenaKnockback(Vector3 knockbackVel)
+    {
+        if (!isIn3DArena || arenaResolving) return;
+        if (isBucketParryingLocal) return;
+
+        PlayerController pc = GetPrimaryPlayerController();
+        if (pc != null)
+        {
+            pc.ApplyKnockback(new Vector3(knockbackVel.x, 0f, knockbackVel.z), knockbackVel.y);
+            arenaHitIndicatorTimer = Mathf.Max(arenaHitIndicatorTimer, 0.85f);
+            arenaLastHitLabel = "💥 BLASTED BACK BY MOONFLOWER!";
+        }
+    }
+
     public void ApplyRemoteParryNotification(int blockedDamage, int restoredRemoteHP)
     {
         if (!isIn3DArena) return;
@@ -1350,14 +1511,6 @@ public class GridManager : MonoBehaviour
 
     private void CancelAllActiveArenaAbilities(PlayerController pc)
     {
-        isChargingMoonBeam = false;
-        moonBeamChargeTimer = 0f;
-        if (localMoonChargeOrb != null)
-        {
-            Destroy(localMoonChargeOrb);
-            localMoonChargeOrb = null;
-        }
-
         isChargingRoseThorn = false;
         roseThornChargeTimer = 0f;
 
@@ -1556,43 +1709,7 @@ public class GridManager : MonoBehaviour
             }
         }
 
-        // 3. Tick active Moonflower Charged Moon Beam
-        if (isChargingMoonBeam)
-        {
-            moonBeamChargeTimer -= Time.deltaTime;
-            float progress = 1.0f - Mathf.Clamp01(moonBeamChargeTimer / Mathf.Max(0.01f, moonBeamChargeDuration));
-
-            if (localMoonChargeOrb == null && arena3DRoot != null)
-            {
-                localMoonChargeOrb = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                localMoonChargeOrb.name = "MoonBeamChargeOrb";
-                localMoonChargeOrb.transform.SetParent(arena3DRoot.transform, true);
-                DestroyCollider(localMoonChargeOrb);
-                localMoonChargeOrb.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.45f, 0.95f, 1.0f));
-            }
-
-            if (localMoonChargeOrb != null && targetCamera != null)
-            {
-                Vector3 orbPos = pc.transform.position + new Vector3(0f, 1.32f, 0f) + targetCamera.transform.forward * 0.42f;
-                localMoonChargeOrb.transform.position = orbPos;
-                float orbScale = Mathf.Lerp(0.18f, 0.68f, progress) + Mathf.Sin(Time.time * 18f) * 0.03f;
-                localMoonChargeOrb.transform.localScale = Vector3.one * orbScale;
-            }
-
-            if (moonBeamChargeTimer <= 0f)
-            {
-                isChargingMoonBeam = false;
-                if (localMoonChargeOrb != null)
-                {
-                    Destroy(localMoonChargeOrb);
-                    localMoonChargeOrb = null;
-                }
-                FireMoonflowerLaserBeam(pc);
-            }
-            return;
-        }
-
-        // 4. Tick active Rose Hitscan Thorn Charge
+        // 3. Tick active Rose Hitscan Thorn Charge
         if (isChargingRoseThorn)
         {
             roseThornChargeTimer -= Time.deltaTime;
@@ -1746,12 +1863,11 @@ public class GridManager : MonoBehaviour
             // Plant Player Abilities & Cooldowns
             if (activePlant == PlantType.Moonflower)
             {
-                // Right Click / E: Charged Moon Laser Beam (65 Dmg, 6.0s Cooldown)
+                // Right Click / E: Lunar Outburst Explosion (20 Dmg + Self & Zombie Knockback Back/Up, 10.0s Cooldown)
                 // Left Click: Quick Solar Bolt (18 Dmg, 0.8s Cooldown)
                 if ((rightClick || keyE) && arenaSecondaryCooldownTimer <= 0f)
                 {
-                    isChargingMoonBeam = true;
-                    moonBeamChargeTimer = moonBeamChargeDuration;
+                    TriggerMoonflowerOutburst(pc);
                 }
                 else if (leftClick && arenaAbilityCooldownTimer <= 0f)
                 {
@@ -1958,6 +2074,32 @@ public class GridManager : MonoBehaviour
 
     private void UpdateSoloArenaSparringBot(PlayerController pc, bool localIsZombie, PlantType activePlant, ZombieType activeZombie)
     {
+        // Integrate any active knockback arc (e.g. Moonflower Outburst) on the solo bot avatar
+        if (soloBotKnockbackVelocity.sqrMagnitude > 0.001f || remoteArenaAvatar.transform.position.y > 1.501f)
+        {
+            soloBotKnockbackVelocity.y += -9.81f * Time.deltaTime;
+            Vector3 nextPos = remoteArenaAvatar.transform.position + soloBotKnockbackVelocity * Time.deltaTime;
+            nextPos.x = Mathf.Clamp(nextPos.x, -20.5f, 20.5f);
+            nextPos.z = Mathf.Clamp(nextPos.z, -46.5f, -5.5f);
+            if (nextPos.y <= 1.5f)
+            {
+                nextPos.y = 1.5f;
+                soloBotKnockbackVelocity.y = 0f;
+                soloBotKnockbackVelocity.x = Mathf.Lerp(soloBotKnockbackVelocity.x, 0f, Time.deltaTime * 10f);
+                soloBotKnockbackVelocity.z = Mathf.Lerp(soloBotKnockbackVelocity.z, 0f, Time.deltaTime * 10f);
+                if (new Vector2(soloBotKnockbackVelocity.x, soloBotKnockbackVelocity.z).sqrMagnitude < 0.01f)
+                {
+                    soloBotKnockbackVelocity = Vector3.zero;
+                }
+            }
+            else
+            {
+                soloBotKnockbackVelocity.x = Mathf.Lerp(soloBotKnockbackVelocity.x, 0f, Time.deltaTime * 2.4f);
+                soloBotKnockbackVelocity.z = Mathf.Lerp(soloBotKnockbackVelocity.z, 0f, Time.deltaTime * 2.4f);
+            }
+            remoteArenaAvatar.transform.position = nextPos;
+        }
+
         if (remoteImmobilizedTimer > 0f) return;
 
         // Gentle strafing & facing player so solo testing feels alive
@@ -1975,9 +2117,30 @@ public class GridManager : MonoBehaviour
         {
             if (localIsZombie)
             {
+                // AI Moonflower uses Outburst when Zombie is close, or shoots Solar Bolt at range
+                float distToZombie = Vector3.Distance(pc.transform.position, remoteArenaAvatar.transform.position);
+                if (activePlant == PlantType.Moonflower && distToZombie <= moonflowerBurstRadius)
+                {
+                    soloBotActionTimer = 4.2f;
+                    Vector3 forwardFromBot = toPlayer.sqrMagnitude > 0.01f ? toPlayer.normalized : remoteArenaAvatar.transform.forward;
+                    Vector3 burstOrigin = remoteArenaAvatar.transform.position + forwardFromBot * 0.45f;
+                    Spawn3DMoonExplosionEffect(burstOrigin);
+                    soloBotKnockbackVelocity = (-forwardFromBot * 9.8f) + (Vector3.up * 6.4f);
+
+                    if (!isBucketParryingLocal)
+                    {
+                        Vector3 pushZombieDir = pc.transform.position - burstOrigin;
+                        pushZombieDir.y = 0f;
+                        pushZombieDir = pushZombieDir.sqrMagnitude > 0.01f ? pushZombieDir.normalized : forwardFromBot;
+                        pc.ApplyKnockback(pushZombieDir * 10.5f, 6.5f);
+                    }
+                    ApplyRemoteArenaDamage(moonflowerBurstDamage, 0f);
+                    return;
+                }
+
                 // Remote AI is a Plant shooting at the Zombie player (great for testing Buckethead Parry & Bunny Slide!)
-                int dmg = (activePlant == PlantType.Moonflower) ? 45 : ((activePlant == PlantType.Durian) ? 35 : 25);
-                soloBotActionTimer = (activePlant == PlantType.Moonflower) ? 3.2f : 2.3f;
+                int dmg = (activePlant == PlantType.Moonflower) ? 18 : ((activePlant == PlantType.Durian) ? 35 : 25);
+                soloBotActionTimer = (activePlant == PlantType.Moonflower) ? 2.4f : 2.3f;
 
                 Vector3 start = remoteArenaAvatar.transform.position + new Vector3(0f, 0.6f, 0f);
                 Vector3 target = pc.transform.position + new Vector3(0f, isBunnySlidingLocal ? 0.45f : 0.1f, 0f);
@@ -2084,30 +2247,59 @@ public class GridManager : MonoBehaviour
         }
     }
 
-    private void FireMoonflowerLaserBeam(PlayerController pc)
+    private void TriggerMoonflowerOutburst(PlayerController pc)
     {
-        arenaSecondaryCooldownTimer = 6.0f;
-        arenaSecondaryMaxCooldown = 6.0f;
+        arenaSecondaryCooldownTimer = moonflowerBurstCooldown; // 10.0s cooldown
+        arenaSecondaryMaxCooldown = moonflowerBurstCooldown;
         if (targetCamera == null) targetCamera = Camera.main;
-        if (targetCamera == null) return;
 
-        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-        Vector3 beamStart = pc.transform.position + new Vector3(0f, 1.25f, 0f) + targetCamera.transform.forward * 0.35f;
+        Vector3 aimForward = (targetCamera != null) ? targetCamera.transform.forward : pc.transform.forward;
+        Vector3 flatForward = new Vector3(aimForward.x, 0f, aimForward.z);
+        if (flatForward.sqrMagnitude < 0.001f) flatForward = pc.transform.forward;
+        flatForward.Normalize();
 
-        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.55f, 65f, out Vector3 hitPoint);
-        Spawn3DBeamEffect(beamStart, hitPoint, new Color(0.25f, 0.95f, 1.0f), 0.28f, 0.45f);
-        OnArenaAbilityFxLocal?.Invoke("BEAM", beamStart, hitPoint);
+        Vector3 explosionCenter = pc.transform.position + flatForward * 0.45f;
+        Spawn3DMoonExplosionEffect(explosionCenter);
+        OnArenaAbilityFxLocal?.Invoke("MOON_BURST", explosionCenter, flatForward);
 
-        if (hitOpponent)
+        // Knock Moonflower back and up (recoil escape jump)
+        pc.ApplyKnockback(-flatForward * 9.8f, 6.4f, suppressLandingSlow: true);
+
+        // Check if the Zombie player is caught inside the small explosion
+        if (remoteArenaAvatar == null) return;
+
+        Physics.SyncTransforms();
+        Vector3 oppPos = remoteArenaAvatar.transform.position;
+        float dist = Vector3.Distance(explosionCenter, oppPos);
+        if (dist > moonflowerBurstRadius) return;
+
+        // Require clear line-of-sight past point-blank range so thick arena walls block the blast
+        if (dist > 1.6f &&
+            Physics.Linecast(explosionCenter + Vector3.up * 0.6f, oppPos + Vector3.up * 0.6f, out RaycastHit blockHit) &&
+            !IsOpponentHitbox(blockHit.collider) &&
+            blockHit.collider.GetComponent<PlayerController>() == null)
         {
-            if (remoteIsBucketParrying)
-            {
-                RegisterArenaParriedByOpponent(65);
-            }
-            else
-            {
-                DealDamageToOpponent(65, "MOON LASER BEAM HIT (65 DMG)!", 0f);
-            }
+            return;
+        }
+
+        if (remoteIsBucketParrying)
+        {
+            RegisterArenaParriedByOpponent(moonflowerBurstDamage);
+            return;
+        }
+
+        DealDamageToOpponent(moonflowerBurstDamage, $"LUNAR OUTBURST HIT ({moonflowerBurstDamage} DMG)!", 0f);
+
+        // Knock the Zombie player back (away from the explosion) and up
+        Vector3 pushDir = oppPos - explosionCenter;
+        pushDir.y = 0f;
+        pushDir = (pushDir.sqrMagnitude > 0.01f) ? pushDir.normalized : flatForward;
+        Vector3 zombieKnockbackVel = (pushDir * 10.5f) + (Vector3.up * 6.5f);
+
+        OnArenaKnockbackLocal?.Invoke(zombieKnockbackVel);
+        if (!hasRemoteArenaPose)
+        {
+            soloBotKnockbackVelocity = zombieKnockbackVel;
         }
     }
 
@@ -2390,6 +2582,80 @@ public class GridManager : MonoBehaviour
         {
             Spawn3DBeamEffect(startPos, startPos + Vector3.up * 2.2f, new Color(0.35f, 0.95f, 1.0f), 0.55f, 0.35f);
         }
+        else if (fxType == "MOON_BURST")
+        {
+            Spawn3DMoonExplosionEffect(startPos);
+        }
+    }
+
+    private sealed class ExpandingBurstFx : MonoBehaviour
+    {
+        public float duration = 0.36f;
+        public float startScale = 0.35f;
+        public float endScale = 3.6f;
+        private float elapsed = 0f;
+
+        private void Update()
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / Mathf.Max(0.01f, duration));
+            float eased = 1f - Mathf.Pow(1f - t, 3f);
+            float scale = Mathf.Lerp(startScale, endScale, eased);
+            transform.localScale = Vector3.one * scale;
+            transform.Rotate(0f, 190f * Time.deltaTime, 0f, Space.Self);
+            if (elapsed >= duration)
+            {
+                Destroy(gameObject);
+            }
+        }
+    }
+
+    private void Spawn3DMoonExplosionEffect(Vector3 center)
+    {
+        if (arena3DRoot == null) return;
+
+        GameObject root = new GameObject("MoonflowerOutburstFX");
+        root.transform.SetParent(arena3DRoot.transform, true);
+        root.transform.position = center;
+
+        Material coreMat = CreateColoredMaterial(new Color(1.0f, 0.94f, 0.48f));
+        Material moonCyanMat = CreateColoredMaterial(new Color(0.32f, 0.95f, 1.0f));
+        Material shockVioletMat = CreateColoredMaterial(new Color(0.65f, 0.42f, 1.0f));
+
+        // Inner bright solar-lunar core flash
+        GameObject core = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        core.transform.SetParent(root.transform, false);
+        core.transform.localScale = new Vector3(0.45f, 0.45f, 0.45f);
+        DestroyCollider(core);
+        core.GetComponent<Renderer>().sharedMaterial = coreMat;
+
+        // Ground-hugging shockwave disc
+        GameObject ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        ring.transform.SetParent(root.transform, false);
+        ring.transform.localPosition = new Vector3(0f, -0.35f, 0f);
+        ring.transform.localScale = new Vector3(1.1f, 0.04f, 1.1f);
+        DestroyCollider(ring);
+        ring.GetComponent<Renderer>().sharedMaterial = moonCyanMat;
+
+        // 8 radial lunar burst shards expanding outward
+        int sparkCount = 8;
+        for (int i = 0; i < sparkCount; i++)
+        {
+            float rad = (i * (360f / sparkCount)) * Mathf.Deg2Rad;
+            Vector3 dir = new Vector3(Mathf.Cos(rad), 0.25f, Mathf.Sin(rad)).normalized;
+            GameObject shard = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            shard.transform.SetParent(root.transform, false);
+            shard.transform.localPosition = dir * 0.42f;
+            shard.transform.localRotation = Quaternion.LookRotation(dir);
+            shard.transform.localScale = new Vector3(0.11f, 0.11f, 0.34f);
+            DestroyCollider(shard);
+            shard.GetComponent<Renderer>().sharedMaterial = (i % 2 == 0) ? moonCyanMat : shockVioletMat;
+        }
+
+        ExpandingBurstFx anim = root.AddComponent<ExpandingBurstFx>();
+        anim.duration = 0.36f;
+        anim.startScale = 0.45f;
+        anim.endScale = 3.8f;
     }
 
     private void Spawn3DBeamEffect(Vector3 start, Vector3 end, Color color, float thickness, float duration)
@@ -2494,16 +2760,25 @@ public class GridManager : MonoBehaviour
         PlayerController chosenPlayer = GetPrimaryPlayerController();
         CancelAllActiveArenaAbilities(chosenPlayer);
 
+        lastArenaExitUnscaledTime = Time.unscaledTime;
+        if (currentClashId != 0) resolvedClashIds.Add(currentClashId);
+        foreach (int id in activeClashIds) resolvedClashIds.Add(id);
+        activeClashIds.Clear();
+        currentClashId = 0;
+
         isIn3DArena = false;
         isZoomingIntoClash = false;
         arenaResolving = false;
         hasRemoteArenaPose = false;
         localInitiatedCurrentClash = false;
+        soloBotKnockbackVelocity = Vector3.zero;
 
         if (arena3DRoot != null)
         {
             Destroy(arena3DRoot);
             arena3DRoot = null;
+            arenaObstaclesRoot = null;
+            arenaFloorRenderer = null;
             remoteArenaAvatar = null;
             remoteBodyHitbox = null;
             remoteHeadHitbox = null;
@@ -2513,29 +2788,26 @@ public class GridManager : MonoBehaviour
             remoteHpBarFillRenderer = null;
         }
 
-        // Remove the clashing zombie so it doesn't immediately re-trigger on the exact same frame
+        // Remove the defeated clashing zombie immediately so it cannot tick on the unpaused frame
         if (destroyZombie)
         {
-            if (clashingZombie != null)
+            WallZombie targetZombie = clashingZombie;
+            if (targetZombie == null && clashingPlantRow >= 0)
             {
-                Destroy(clashingZombie.gameObject);
+                Vector3 refPos = GetTileWorldPosition(clashingPlantRow, Mathf.Max(0, clashingPlantCol), 0f);
+                targetZombie = FindClosestZombieInRow(clashingPlantRow, refPos);
             }
-            else if (clashingPlantRow >= 0)
+            if (targetZombie != null)
             {
-                Vector3 refPos = GetTileWorldPosition(clashingPlantRow, clashingPlantCol, 0f);
-                WallZombie best = null;
-                float bestDist = float.MaxValue;
-                for (int i = 0; i < WallZombie.ActiveZombies.Count; i++)
-                {
-                    WallZombie z = WallZombie.ActiveZombies[i];
-                    if (z == null || z.row != clashingPlantRow) continue;
-                    float d = Mathf.Abs(z.transform.position.x - refPos.x);
-                    if (d < bestDist) { bestDist = d; best = z; }
-                }
-                if (best != null) Destroy(best.gameObject);
+                targetZombie.MarkClashResolved();
+                targetZombie.gameObject.SetActive(false);
+                Destroy(targetZombie.gameObject);
             }
         }
         clashingZombie = null;
+        clashingPlant = null;
+        clashingPlantRow = -1;
+        clashingPlantCol = -1;
 
         if (chosenPlayer != null)
         {
@@ -2545,45 +2817,141 @@ public class GridManager : MonoBehaviour
 
         is2DWorldPaused = false;
         SyncWallScaleAndCamera();
+        Update2DBackgroundMusic();
+    }
+
+    private void Ensure2DBackgroundMusicReady()
+    {
+        if (backgroundMusic2D == null)
+        {
+            backgroundMusic2D = Resources.Load<AudioClip>("Audio/Gameplay2DTheme");
+        }
+        if (backgroundMusic2D == null) return;
+
+        if (backgroundMusic2DSource == null)
+        {
+            GameObject audioObj = new GameObject("BackgroundMusic2DSource");
+            audioObj.transform.SetParent(transform, false);
+            backgroundMusic2DSource = audioObj.AddComponent<AudioSource>();
+            backgroundMusic2DSource.playOnAwake = false;
+            backgroundMusic2DSource.spatialBlend = 0f;
+            backgroundMusic2DSource.priority = 0;
+        }
+
+        if (backgroundMusic2DSource.clip != backgroundMusic2D)
+        {
+            backgroundMusic2DSource.clip = backgroundMusic2D;
+        }
+        backgroundMusic2DSource.loop = true;
+        backgroundMusic2DSource.volume = backgroundMusicVolume;
+    }
+
+    private void Pause2DMusic()
+    {
+        if (backgroundMusic2DSource == null || !music2DStarted || music2DPaused) return;
+        music2DSavedTime = backgroundMusic2DSource.time;
+        backgroundMusic2DSource.Pause();
+        music2DPaused = true;
+    }
+
+    public void Stop2DMusic()
+    {
+        if (backgroundMusic2DSource != null)
+        {
+            backgroundMusic2DSource.Stop();
+        }
+        music2DStarted = false;
+        music2DPaused = false;
+        music2DSavedTime = 0f;
+    }
+
+    private void Update2DBackgroundMusic()
+    {
+        if (!Application.isPlaying) return;
+
+        if (isIn3DArena)
+        {
+            Pause2DMusic();
+            return;
+        }
+
+        MultiplayerMenuManager menu = GetMenuManager();
+        bool in2DScene = gameplayActive ||
+            (menu != null && (menu.currentState == MultiplayerMenuManager.MenuState.RoleSelection ||
+                              menu.currentState == MultiplayerMenuManager.MenuState.Gameplay));
+
+        if (!in2DScene)
+        {
+            if (backgroundMusic2DSource != null && music2DStarted)
+            {
+                backgroundMusic2DSource.Stop();
+                music2DStarted = false;
+                music2DPaused = false;
+                music2DSavedTime = 0f;
+            }
+            return;
+        }
+
+        Ensure2DBackgroundMusicReady();
+        if (backgroundMusic2DSource == null || backgroundMusic2D == null) return;
+
+        if (!music2DStarted)
+        {
+            backgroundMusic2DSource.time = 0f;
+            backgroundMusic2DSource.Play();
+            music2DStarted = true;
+            music2DPaused = false;
+        }
+        else if (music2DPaused)
+        {
+            backgroundMusic2DSource.UnPause();
+            if (!backgroundMusic2DSource.isPlaying)
+            {
+                float maxTime = Mathf.Max(0.01f, backgroundMusic2D.length - 0.02f);
+                backgroundMusic2DSource.time = Mathf.Clamp(music2DSavedTime, 0f, maxTime);
+                backgroundMusic2DSource.Play();
+            }
+            music2DPaused = false;
+        }
+        else if (!backgroundMusic2DSource.isPlaying)
+        {
+            backgroundMusic2DSource.time = 0f;
+            backgroundMusic2DSource.Play();
+        }
     }
 
     public void TriggerPlantsWin(bool notifyNetwork = true)
     {
-        if (matchResult != MatchResult.InProgress) return;
-        matchResult = MatchResult.PlantsWin;
-        is2DWorldPaused = true;
-        isPlantSelected = false;
-        isZombieSelected = false;
-        HideAllPreviewGhosts();
-
-        if (isIn3DArena)
-        {
-            Exit3DArenaBackTo2DWall();
-        }
-
-        if (notifyNetwork)
-        {
-            OnMatchEndedLocal?.Invoke(MatchResult.PlantsWin);
-        }
+        EndMatch(MatchResult.PlantsWin, notifyNetwork);
     }
 
     public void TriggerZombiesWin(bool notifyNetwork = true)
     {
-        if (matchResult != MatchResult.InProgress) return;
-        matchResult = MatchResult.ZombiesWin;
-        is2DWorldPaused = true;
-        isPlantSelected = false;
-        isZombieSelected = false;
-        HideAllPreviewGhosts();
+        EndMatch(MatchResult.ZombiesWin, notifyNetwork);
+    }
+
+    private void EndMatch(MatchResult result, bool notifyNetwork)
+    {
+        if (matchResult != MatchResult.InProgress || result == MatchResult.InProgress) return;
 
         if (isIn3DArena)
         {
             Exit3DArenaBackTo2DWall();
         }
 
+        matchResult = result;
+        is2DWorldPaused = true;
+        isZoomingIntoClash = false;
+        isPlantSelected = false;
+        isZombieSelected = false;
+        HideAllPreviewGhosts();
+
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+
         if (notifyNetwork)
         {
-            OnMatchEndedLocal?.Invoke(MatchResult.ZombiesWin);
+            OnMatchEndedLocal?.Invoke(result);
         }
     }
 
@@ -2646,6 +3014,14 @@ public class GridManager : MonoBehaviour
         zombieCooldownTimer = 0f;
         clashingZombie = null;
         clashingPlant = null;
+        clashingPlantRow = -1;
+        clashingPlantCol = -1;
+        currentClashId = 0;
+        activeClashIds.Clear();
+        resolvedClashIds.Clear();
+        lastResolvedPlantRow = -1;
+        lastResolvedPlantCol = -1;
+        lastArenaExitUnscaledTime = -999f;
 
         HideAllPreviewGhosts();
 
@@ -4579,9 +4955,9 @@ public class GridManager : MonoBehaviour
         }
         else if (activePlant == PlantType.Moonflower)
         {
-            abilityHint = "[L-Click] Solar Bolt (18 DMG)  •  [R-Click / E] Charged Moon Beam (65 DMG Laser)";
+            abilityHint = "[L-Click] Solar Bolt (18 DMG)  •  [R-Click / E] Lunar Outburst (20 DMG Blast + Self/Zombie Knockback)";
             primaryAbilityTitle = "Solar Bolt [LMB]\n18 DMG";
-            secondaryAbilityTitle = "Moon Beam [RMB/E]\n65 DMG";
+            secondaryAbilityTitle = "Lunar Outburst [RMB/E]\n20 DMG • Knockback";
         }
         else if (activePlant == PlantType.Rose || activePlant == PlantType.Roze)
         {
@@ -4652,12 +5028,7 @@ public class GridManager : MonoBehaviour
 
         // 5. Ability Charge / Roll / Parry / Slide Progress Bar below the Center Cursor
         PlayerController pc = GetPrimaryPlayerController();
-        if (isChargingMoonBeam)
-        {
-            float pct = 1.0f - Mathf.Clamp01(moonBeamChargeTimer / Mathf.Max(0.01f, moonBeamChargeDuration));
-            DrawCenterChargeBar(cx, cy - 36f, pct, $"CHARGING MOON BEAM... {(pct * 100f):F0}%", new Color(0.30f, 0.95f, 1.0f));
-        }
-        else if (isChargingRoseThorn)
+        if (isChargingRoseThorn)
         {
             float pct = 1.0f - Mathf.Clamp01(roseThornChargeTimer / Mathf.Max(0.01f, roseThornChargeDuration));
             DrawCenterChargeBar(cx, cy - 36f, pct, "CHARGING THORN...", new Color(1.0f, 0.25f, 0.45f));
@@ -4921,58 +5292,92 @@ public class GridManager : MonoBehaviour
         GUIStyle descStyle = s_GameOverDescStyle;
         GUIStyle btnStyle = s_GameOverBtnStyle;
 
-        if (matchResult == MatchResult.PlantsWin)
-        {
-            GUI.backgroundColor = new Color(0.06f, 0.22f, 0.10f, 0.96f);
-            GUI.Box(boxRect, GUIContent.none);
+        bool plantsWon = (matchResult == MatchResult.PlantsWin);
+        GUI.backgroundColor = plantsWon
+            ? new Color(0.06f, 0.22f, 0.10f, 0.96f)
+            : new Color(0.26f, 0.06f, 0.12f, 0.96f);
+        GUI.Box(boxRect, GUIContent.none);
 
-            string title = (localRole == MultiplayerMenuManager.PlayerRole.Plant)
+        string title;
+        if (plantsWon)
+        {
+            title = (localRole == MultiplayerMenuManager.PlayerRole.Plant)
                 ? "VICTORY! (PLANTS WIN)"
                 : (localRole == MultiplayerMenuManager.PlayerRole.Zombie)
                     ? "DEFEAT! (PLANTS WIN)"
                     : "PLANTS WIN!";
-
-            titleStyle.normal.textColor = new Color(0.35f, 1.0f, 0.45f);
-            GUI.Label(new Rect(boxRect.x, boxRect.y + 22f, boxRect.width, 42f), title, titleStyle);
-
-            descStyle.normal.textColor = new Color(0.9f, 0.98f, 0.9f);
-            GUI.Label(new Rect(boxRect.x + 30f, boxRect.y + 75f, boxRect.width - 60f, 70f),
-                "The 5-minute defense timer reached 00:00!\nThe Plants stood strong and successfully defended the garden wall against the zombie assault!",
-                descStyle);
-
-            GUI.backgroundColor = new Color(0.2f, 0.85f, 0.35f);
-            if (GUI.Button(new Rect(boxRect.x + (boxRect.width - 240f) * 0.5f, boxRect.y + 185f, 240f, 55f), "RESTART MATCH", btnStyle))
-            {
-                ResetMatch(notifyNetwork: true);
-            }
         }
-        else if (matchResult == MatchResult.ZombiesWin)
+        else
         {
-            GUI.backgroundColor = new Color(0.26f, 0.06f, 0.12f, 0.96f);
-            GUI.Box(boxRect, GUIContent.none);
-
-            string title = (localRole == MultiplayerMenuManager.PlayerRole.Zombie)
+            title = (localRole == MultiplayerMenuManager.PlayerRole.Zombie)
                 ? "VICTORY! (ZOMBIES WIN)"
                 : (localRole == MultiplayerMenuManager.PlayerRole.Plant)
                     ? "DEFEAT! (ZOMBIES WIN)"
                     : "ZOMBIES WIN!";
+        }
 
-            titleStyle.normal.textColor = new Color(1.0f, 0.35f, 0.35f);
-            GUI.Label(new Rect(boxRect.x, boxRect.y + 22f, boxRect.width, 42f), title, titleStyle);
+        titleStyle.normal.textColor = plantsWon
+            ? new Color(0.35f, 1.0f, 0.45f)
+            : new Color(1.0f, 0.35f, 0.35f);
+        GUI.Label(new Rect(boxRect.x, boxRect.y + 22f, boxRect.width, 42f), title, titleStyle);
 
-            descStyle.normal.textColor = new Color(1.0f, 0.9f, 0.9f);
-            GUI.Label(new Rect(boxRect.x + 30f, boxRect.y + 75f, boxRect.width - 60f, 70f),
-                "A Zombie crossed the defense line of the board!\nThe zombies breached your perimeter and ate your brains!",
-                descStyle);
+        descStyle.normal.textColor = plantsWon
+            ? new Color(0.9f, 0.98f, 0.9f)
+            : new Color(1.0f, 0.9f, 0.9f);
+        string description = plantsWon
+            ? "The 5-minute defense timer reached 00:00!\nThe Plants stood strong and successfully defended the garden wall against the zombie assault!"
+            : "A Zombie crossed the defense line of the board!\nThe zombies breached your perimeter and ate your brains!";
+        GUI.Label(new Rect(boxRect.x + 30f, boxRect.y + 75f, boxRect.width - 60f, 70f), description, descStyle);
 
-            GUI.backgroundColor = new Color(0.85f, 0.25f, 0.35f);
-            if (GUI.Button(new Rect(boxRect.x + (boxRect.width - 240f) * 0.5f, boxRect.y + 185f, 240f, 55f), "RESTART MATCH", btnStyle))
-            {
-                ResetMatch(notifyNetwork: true);
-            }
+        float btnWidth = 220f;
+        float btnHeight = 55f;
+        float btnGap = 24f;
+        float buttonsStartX = boxRect.x + (boxRect.width - (btnWidth * 2f + btnGap)) * 0.5f;
+        float btnY = boxRect.y + 185f;
+
+        GUI.backgroundColor = new Color(0.24f, 0.68f, 0.95f);
+        if (GUI.Button(new Rect(buttonsStartX, btnY, btnWidth, btnHeight), "MAIN MENU", btnStyle))
+        {
+            GoToMainMenuFromGameOver();
+        }
+
+        GUI.backgroundColor = new Color(0.85f, 0.28f, 0.32f);
+        if (GUI.Button(new Rect(buttonsStartX + btnWidth + btnGap, btnY, btnWidth, btnHeight), "EXIT GAME", btnStyle))
+        {
+            ExitGameFromGameOver();
         }
 
         GUI.backgroundColor = prevBg;
+    }
+
+    private void GoToMainMenuFromGameOver()
+    {
+        MultiplayerMenuManager menu = GetMenuManager();
+        if (menu != null)
+        {
+            menu.ReturnToMainMenu();
+        }
+        else
+        {
+            ResetMatch(notifyNetwork: false);
+            Stop2DMusic();
+        }
+    }
+
+    private void ExitGameFromGameOver()
+    {
+        MultiplayerMenuManager menu = GetMenuManager();
+        if (menu != null)
+        {
+            menu.QuitGame();
+            return;
+        }
+
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
     }
 
     private void OnDrawGizmos()

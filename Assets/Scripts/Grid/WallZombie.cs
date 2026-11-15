@@ -87,6 +87,11 @@ public class WallZombie : MonoBehaviour
         triggeredClash = true;
     }
 
+    public void ResetForNextClash()
+    {
+        triggeredClash = false;
+    }
+
     public void TakeDamage(int amount)
     {
         currentHealth -= amount;
@@ -98,7 +103,7 @@ public class WallZombie : MonoBehaviour
 
     private void Update()
     {
-        if (!Application.isPlaying || gridManager == null)
+        if (!Application.isPlaying || !gameObject.activeInHierarchy || gridManager == null)
         {
             return;
         }

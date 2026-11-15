@@ -167,6 +167,7 @@ public class MultiplayerMenuManager : MonoBehaviour
         gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
         gameplayWallGrid.OnArenaAttackHitLocal -= HandleArenaAttackHit;
         gameplayWallGrid.OnArenaParriedLocal -= HandleArenaParried;
+        gameplayWallGrid.OnArenaKnockbackLocal -= HandleArenaKnockback;
 
         gameplayWallGrid.OnPlantPlacedLocal += HandleLocalPlantPlaced;
         gameplayWallGrid.OnZombiePlacedLocal += HandleLocalZombiePlaced;
@@ -183,6 +184,7 @@ public class MultiplayerMenuManager : MonoBehaviour
         gameplayWallGrid.OnArenaSeedLocal += HandleArenaSeed;
         gameplayWallGrid.OnArenaAttackHitLocal += HandleArenaAttackHit;
         gameplayWallGrid.OnArenaParriedLocal += HandleArenaParried;
+        gameplayWallGrid.OnArenaKnockbackLocal += HandleArenaKnockback;
         gridEventsSubscribed = true;
     }
 
@@ -205,6 +207,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
             gameplayWallGrid.OnArenaAttackHitLocal -= HandleArenaAttackHit;
             gameplayWallGrid.OnArenaParriedLocal -= HandleArenaParried;
+            gameplayWallGrid.OnArenaKnockbackLocal -= HandleArenaKnockback;
         }
         gridEventsSubscribed = false;
         StopNetwork();
@@ -894,6 +897,7 @@ public class MultiplayerMenuManager : MonoBehaviour
                 if (p.Length >= 4 && Enum.TryParse(p[3], out PlayerRole rr)) remoteRole = rr;
                 ZombieType zType = ZombieType.Normal;
                 if (p.Length >= 5 && Enum.TryParse(p[4], out ZombieType zt)) zType = zt;
+                int clashId = (p.Length >= 6 && int.TryParse(p[5], out int cid)) ? cid : 0;
 
                 // Sync local role from remote peer's role if needed
                 if (remoteRole == PlayerRole.Zombie && localRole != PlayerRole.Plant)
@@ -912,18 +916,24 @@ public class MultiplayerMenuManager : MonoBehaviour
                 if (gameplayWallGrid != null)
                 {
                     gameplayWallGrid.gameplayActive = true;
-                    gameplayWallGrid.TriggerRemoteClash(r, c, pType, remoteRole, zType);
+                    gameplayWallGrid.TriggerRemoteClash(r, c, pType, remoteRole, zType, clashId);
                 }
             }
             else if (msg.StartsWith("APOSE:"))
             {
                 string[] p = msg.Substring(6).Split(',');
                 int stateFlags = (p.Length >= 5 && int.TryParse(p[4], out int sf)) ? sf : 0;
-                gameplayWallGrid.SetRemoteArenaPose(new Vector3(PF(p[0]), PF(p[1]), PF(p[2])), PF(p[3]), stateFlags);
+                int clashId = (p.Length >= 6 && int.TryParse(p[5], out int cid)) ? cid : 0;
+                gameplayWallGrid.SetRemoteArenaPose(new Vector3(PF(p[0]), PF(p[1]), PF(p[2])), PF(p[3]), stateFlags, clashId);
             }
             else if (msg.StartsWith("ARESULT:"))
             {
-                gameplayWallGrid.ResolveArena(msg.Substring(8) == "Z", notifyNetwork: false);
+                string[] p = msg.Substring(8).Split(',');
+                bool zombieWon = p[0] == "Z";
+                int r = (p.Length >= 2 && int.TryParse(p[1], out int pr)) ? pr : -1;
+                int c = (p.Length >= 3 && int.TryParse(p[2], out int pc)) ? pc : -1;
+                int clashId = (p.Length >= 4 && int.TryParse(p[3], out int cid)) ? cid : 0;
+                gameplayWallGrid.ResolveArena(zombieWon, notifyNetwork: false, resolvedRow: r, resolvedCol: c, clashId: clashId);
             }
             else if (msg.StartsWith("ASTUN:"))
             {
@@ -944,6 +954,14 @@ public class MultiplayerMenuManager : MonoBehaviour
                 if (p.Length >= 2)
                 {
                     gameplayWallGrid.ApplyRemoteParryNotification(int.Parse(p[0]), int.Parse(p[1]));
+                }
+            }
+            else if (msg.StartsWith("AKB:"))
+            {
+                string[] p = msg.Substring(4).Split(',');
+                if (p.Length >= 3)
+                {
+                    gameplayWallGrid.ApplyRemoteArenaKnockback(new Vector3(PF(p[0]), PF(p[1]), PF(p[2])));
                 }
             }
             else if (msg.StartsWith("AFX:"))
@@ -987,19 +1005,19 @@ public class MultiplayerMenuManager : MonoBehaviour
         SendNetworkMessage("MOONGET:" + string.Join(",", ids));
     }
 
-    private void HandleClashStarted(int row, int col, PlantType pType, PlayerRole role, ZombieType zType)
+    private void HandleClashStarted(int row, int col, PlantType pType, PlayerRole role, ZombieType zType, int clashId)
     {
-        SendNetworkMessage($"CLASH:{row},{col},{pType},{role},{zType}");
+        SendNetworkMessage($"CLASH:{row},{col},{pType},{role},{zType},{clashId}");
     }
 
-    private void HandleArenaPose(Vector3 pos, float yaw, int stateFlags)
+    private void HandleArenaPose(Vector3 pos, float yaw, int stateFlags, int clashId)
     {
-        SendNetworkMessage($"APOSE:{F(pos.x)},{F(pos.y)},{F(pos.z)},{F(yaw)},{stateFlags}");
+        SendNetworkMessage($"APOSE:{F(pos.x)},{F(pos.y)},{F(pos.z)},{F(yaw)},{stateFlags},{clashId}");
     }
 
-    private void HandleArenaResolved(bool zombieWon)
+    private void HandleArenaResolved(bool zombieWon, int row, int col, int clashId)
     {
-        SendNetworkMessage("ARESULT:" + (zombieWon ? "Z" : "P"));
+        SendNetworkMessage($"ARESULT:{(zombieWon ? "Z" : "P")},{row},{col},{clashId}");
     }
 
     private void HandleArenaStun(float duration)
@@ -1015,6 +1033,11 @@ public class MultiplayerMenuManager : MonoBehaviour
     private void HandleArenaParried(int blockedDamage, int restoredHP)
     {
         SendNetworkMessage($"APARRY:{blockedDamage},{restoredHP}");
+    }
+
+    private void HandleArenaKnockback(Vector3 velocity)
+    {
+        SendNetworkMessage($"AKB:{F(velocity.x)},{F(velocity.y)},{F(velocity.z)}");
     }
 
     private void HandleArenaAbilityFx(string fxType, Vector3 start, Vector3 end)
@@ -1250,8 +1273,42 @@ public class MultiplayerMenuManager : MonoBehaviour
         tcpServer = null;
     }
 
-    private void QuitGame()
+    /// <summary>Disconnects any active multiplayer session, clears board state, and returns to the Main Menu.</summary>
+    public void ReturnToMainMenu()
     {
+        StopNetwork();
+        while (incomingMessages.TryDequeue(out _)) { }
+        while (outgoingRelayMessages.TryDequeue(out _)) { }
+
+        isHost = false;
+        hostJoinCode = "";
+        enteredJoinCode = "";
+        pendingRelayJoinCode = "";
+        statusMessage = "";
+        showHowToPlayModal = false;
+
+        hostRole = PlayerRole.None;
+        joinerRole = PlayerRole.None;
+        localRole = PlayerRole.None;
+        currentState = MenuState.MainMenu;
+
+        if (gameplayWallGrid != null)
+        {
+            gameplayWallGrid.ResetMatch(notifyNetwork: false);
+            gameplayWallGrid.SetLocalRole(PlayerRole.None);
+            gameplayWallGrid.lockCameraToThisWall = false;
+            gameplayWallGrid.gameplayActive = false;
+            gameplayWallGrid.Stop2DMusic();
+        }
+
+        SnapCameraToMenuWall();
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    public void QuitGame()
+    {
+        StopNetwork();
 #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;
 #else
