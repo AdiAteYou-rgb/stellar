@@ -1,12 +1,12 @@
 ---
 name: unity-dotween-integration
-description: "DOTween + UniTask (ToUniTask, TweenCancelBehaviour, AttachExternalCancellation), DOTween + Coroutine (WaitForCompletion YieldInstruction), DOTween + Addressables/prefab lifetime, DOTween in deterministic Netcode loops. DOTween 与 UniTask(ToUniTask、TweenCancelBehaviour、AttachExternalCancellation)、与协程(WaitForCompletion YieldInstruction)、与 Addressables/预制体生命周期、在确定性 Netcode 循环中的 DOTween 集成。"
+description: "DOTween + UniTask (ToUniTask, TweenCancelBehaviour, AttachExternalCancellation), DOTween + Coroutine (WaitForCompletion YieldInstruction), DOTween + Addressables/prefab lifetime, DOTween in deterministic Netcode loops."
 type: reference
 ---
 
 # DOTween Integration
 
-Sub-doc of [dotween-design](./SKILL.md). Covers how DOTween interoperates with UniTask, Coroutines, Addressables/YooAsset-loaded assets, and Netcode-driven deterministic replay.
+Sub-doc of [dotween-design](./MODULE.md). Covers how DOTween interoperates with UniTask, Coroutines, Addressables/YooAsset-loaded assets, and Netcode-driven deterministic replay.
 
 ## UniTask bridge — the preferred async path
 

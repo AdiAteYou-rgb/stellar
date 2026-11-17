@@ -1,7 +1,7 @@
 {
   "dependencies": {
     "com.besty.unity-skills": {
-      "version": "https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity",
+      "version": "https://github.com/Besty0728/Unity-Skills.git?path=/SkillsForUnity#v3.0.0",
       "depth": 0,
       "source": "git",
       "dependencies": {
@@ -10,7 +10,7 @@
         "com.unity.timeline": "1.7.7",
         "com.unity.ugui": "1.0.0"
       },
-      "hash": "7c9dccd4f5616b931174d0ed07da6c0884f3cdec"
+      "hash": "30e0361732ffb21edc79ecbac2bec775627cb2d8"
     },
     "com.unity.2d.sprite": {
       "version": "1.0.0",

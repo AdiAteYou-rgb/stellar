@@ -1,12 +1,12 @@
 ---
 name: unity-dotween-shortcuts
-description: "Shortcut extensions by target type — Transform (DOMove / DORotate / DOScale / DOPath / DOPunch / DOShake), RectTransform (DOAnchorPos / DOSizeDelta), Image / Text / CanvasGroup (DOFade / DOColor), Material (DOColor / DOFloat / DOOffset), AudioSource / Camera / Light / Rigidbody / Rigidbody2D. 按目标类型的快捷扩展——Transform(DOMove/DORotate/DOScale/DOPath/DOPunch/DOShake)、RectTransform(DOAnchorPos/DOSizeDelta)、Image/Text/CanvasGroup(DOFade/DOColor)、Material(DOColor/DOFloat/DOOffset)、AudioSource/Camera/Light/Rigidbody/Rigidbody2D。"
+description: "Shortcut extensions by target type — Transform (DOMove / DORotate / DOScale / DOPath / DOPunch / DOShake), RectTransform (DOAnchorPos / DOSizeDelta), Image / Text / CanvasGroup (DOFade / DOColor), Material (DOColor / DOFloat / DOOffset), AudioSource / Camera / Light / Rigidbody / Rigidbody2D."
 type: reference
 ---
 
 # DOTween Shortcuts Cheat Sheet
 
-Sub-doc of [dotween-design](./SKILL.md). Shortcut extensions live across multiple files: `DOTween/ShortcutExtensions.cs` (core) plus Modules (`DOTweenModuleUI.cs`, `DOTweenModulePhysics.cs`, etc.).
+Sub-doc of [dotween-design](./MODULE.md). Shortcut extensions live across multiple files: `DOTween/ShortcutExtensions.cs` (core) plus Modules (`DOTweenModuleUI.cs`, `DOTweenModulePhysics.cs`, etc.).
 
 All shortcuts follow this pattern:
 1. Return `Tweener` or `TweenerCore<...>` with `target` pre-set (for `DOTween.Kill(target)` to work).

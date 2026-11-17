@@ -9,9 +9,6 @@ Rename several GameObjects in one call.
 
 **Returns**: `{success, totalItems, successCount, failCount, results: [{success, oldName, newName, entityId, instanceId}]}`. All-or-nothing: a missing object or `newName` reverts every rename.
 
-```python
-unity_skills.call_skill("gameobject_rename_batch", items=[
-    {"instanceId": 12345, "newName": "Enemy_01"},
-    {"instanceId": 12346, "newName": "Enemy_02"}
-])
+```bash
+curl -s "http://localhost:<port>/skill/gameobject_rename_batch?expectProject=<project>" -d '{"items":"[{\"entityId\":\"<enemy_a_entityId>\",\"newName\":\"Enemy_01\"},{\"entityId\":\"<enemy_b_entityId>\",\"newName\":\"Enemy_02\"}]"}'
 ```

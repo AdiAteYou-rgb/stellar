@@ -1,12 +1,12 @@
 ---
 name: unity-dotween-basics
-description: "DOTween bootstrap — DOTween.Init(), IDOTweenInit fluent API, [DOTween] driver GameObject, DOTweenSettings asset, Modules (UI / TMP / Physics) generation, SafeMode, tween capacity, logBehaviour. DOTween 启动——DOTween.Init()、IDOTweenInit 流式 API、[DOTween] 驱动 GameObject、DOTweenSettings 资产、模块(UI/TMP/Physics)生成、SafeMode、补间容量、logBehaviour。"
+description: "DOTween bootstrap — DOTween.Init(), IDOTweenInit fluent API, [DOTween] driver GameObject, DOTweenSettings asset, Modules (UI / TMP / Physics) generation, SafeMode, tween capacity, logBehaviour."
 type: reference
 ---
 
 # DOTween Basics
 
-Sub-doc of [dotween-design](./SKILL.md). Covers what happens between "import the package" and "write your first tween".
+Sub-doc of [dotween-design](./MODULE.md). Covers what happens between "import the package" and "write your first tween".
 
 ## `DOTween.Init` — the entry point
 

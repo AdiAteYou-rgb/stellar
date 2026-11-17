@@ -1,12 +1,12 @@
 ---
 name: unity-unitask-asyncenumerable
-description: "UniTaskAsyncEnumerable LINQ-to-async operators, AsyncReactiveProperty, Channel<T>, IUniTaskAsyncEnumerable<T> lifecycle, EveryValueChanged, Publish, GroupBy, Merge, subscription/leak patterns. UniTaskAsyncEnumerable 的 LINQ 转异步算子、AsyncReactiveProperty、Channel、IUniTaskAsyncEnumerable 生命周期、EveryValueChanged、Publish/GroupBy/Merge 及订阅/泄漏模式。"
+description: "UniTaskAsyncEnumerable LINQ-to-async operators, AsyncReactiveProperty, Channel<T>, IUniTaskAsyncEnumerable<T> lifecycle, EveryValueChanged, Publish, GroupBy, Merge, subscription/leak patterns."
 type: reference
 ---
 
 # UniTask AsyncEnumerable & Reactive
 
-Sub-doc of [unitask-design](./SKILL.md). Covers UniTask's answer to IObservable / IAsyncEnumerable — the `IUniTaskAsyncEnumerable<T>` interface and the `UniTaskAsyncEnumerable` static factory.
+Sub-doc of [unitask-design](./MODULE.md). Covers UniTask's answer to IObservable / IAsyncEnumerable — the `IUniTaskAsyncEnumerable<T>` interface and the `UniTaskAsyncEnumerable` static factory.
 
 ## `IUniTaskAsyncEnumerable<T>`
 

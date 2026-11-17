@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using Stellar.Combat;
 
 [ExecuteAlways]
 public class GridManager : MonoBehaviour
@@ -129,6 +130,7 @@ public class GridManager : MonoBehaviour
     public event Action<float> OnArenaStunLocal;                               // duration in seconds (Durian immobilize)
     public event Action<float> OnArenaDisruptLocal;                            // duration in seconds (Hazmat ability/mobility lock)
     public event Action<string, Vector3, Vector3> OnArenaAbilityFxLocal;       // fxType, startPos, endPos
+    public event Action<HitscanResult> OnArenaHitscanFiredLocal;               // decoupled hitscan logic result for any custom VFX listeners
     public event Action<int> OnArenaSeedLocal;                                 // synced random seed for 3D arena layout
     public event Action<int, float> OnArenaAttackHitLocal;                     // damage, stunDuration
     public event Action<int, int> OnArenaParriedLocal;                         // blockedDamage, restoredHP
@@ -238,6 +240,13 @@ public class GridManager : MonoBehaviour
     private float hazmatGunRecoilTimer = 0f;
     private GameObject localHazmatPovVisual;
 
+    [Header("Hitscan Ray Abilities")]
+    [SerializeField] private HitscanAttackConfig moonflowerSolarBoltHitscan = new HitscanAttackConfig("Solar Bolt", true, 60f);
+    [SerializeField] private HitscanAttackConfig roseThornHitscan = new HitscanAttackConfig("Rose Thorn", true, 65f);
+    [SerializeField] private HitscanAttackConfig roseHeavyVolleyHitscan = new HitscanAttackConfig("Rose Heavy Volley", true, 65f);
+    [SerializeField] private HitscanAttackConfig hazmatAcidShotHitscan = new HitscanAttackConfig("Hazmat Acid Shot", true, 65f);
+    [SerializeField] private HitscanAttackConfig hazmatSludgeBlastHitscan = new HitscanAttackConfig("Hazmat Bio-Disruptor", true, 55f);
+
     // Solo sparring bot timer (only active when testing solo without a second networked player)
     private float soloBotActionTimer = 2.2f;
     private float soloBotStrafePhase = 0f;
@@ -316,6 +325,10 @@ public class GridManager : MonoBehaviour
         if (Application.isPlaying)
         {
             InitializeRuntimeGrid();
+            if (GetComponent<HitscanRayParticleEffects>() == null)
+            {
+                gameObject.AddComponent<HitscanRayParticleEffects>();
+            }
         }
     }
 
@@ -2440,10 +2453,10 @@ public class GridManager : MonoBehaviour
 
                 Vector3 start = remoteArenaAvatar.transform.position + new Vector3(0f, 0.6f, 0f);
                 Vector3 target = pc.transform.position + new Vector3(0f, isBunnySlidingLocal ? 0.45f : 0.1f, 0f);
-                Color beamCol = (activePlant == PlantType.Moonflower) ? new Color(0.25f, 0.95f, 1.0f) : new Color(1.0f, 0.20f, 0.40f);
 
                 bool hasLos = TryRaycastArenaBeam(start, target, out Vector3 beamEnd);
-                Spawn3DBeamEffect(start, beamEnd, beamCol, 0.16f, 0.30f);
+                HitscanAttackConfig botConfig = (activePlant == PlantType.Moonflower) ? moonflowerSolarBoltHitscan : roseThornHitscan;
+                DispatchHitscanVisuals(botConfig, start, beamEnd, hasLos && !isBunnySlidingLocal);
 
                 if (!hasLos)
                 {
@@ -2481,7 +2494,7 @@ public class GridManager : MonoBehaviour
                     bool shouldDisrupt = isDurianRollingLocal || isChargingRoseThorn;
                     if (shouldDisrupt)
                     {
-                        Spawn3DBeamEffect(start, beamEnd, new Color(0.45f, 1.0f, 0.25f), 0.22f, 0.28f);
+                        DispatchHitscanVisuals(hazmatSludgeBlastHitscan, start, beamEnd, hasLos);
                         Spawn3DAcidExplosionEffect(beamEnd);
                         if (hasLos)
                         {
@@ -2490,7 +2503,7 @@ public class GridManager : MonoBehaviour
                     }
                     else
                     {
-                        Spawn3DBeamEffect(start, beamEnd, new Color(0.30f, 1.0f, 0.22f), 0.14f, 0.26f);
+                        DispatchHitscanVisuals(hazmatAcidShotHitscan, start, beamEnd, hasLos);
                         if (hasLos)
                         {
                             int dmg = 20 + Mathf.RoundToInt(localArenaMaxHP * 0.04f);
@@ -2506,22 +2519,53 @@ public class GridManager : MonoBehaviour
         }
     }
 
+    private Camera GetCharacterAimCamera(PlayerController pc)
+    {
+        if (pc != null && pc.playerCamera != null) return pc.playerCamera;
+        if (targetCamera != null) return targetCamera;
+        return Camera.main;
+    }
+
+    private void DispatchHitscanVisuals(HitscanAttackConfig config, Vector3 start, Vector3 end, bool hitOpponent)
+    {
+        Vector3 dir = end - start;
+        float dist = dir.magnitude;
+        HitscanResult fxResult = new HitscanResult
+        {
+            abilityId = config != null ? config.AbilityName : string.Empty,
+            aimRay = dist > 0.0001f ? new Ray(start, dir / dist) : new Ray(start, Vector3.forward),
+            startPoint = start,
+            endPoint = end,
+            didHit = hitOpponent,
+            hitOpponent = hitOpponent,
+            hitCollider = null,
+            hitNormal = dist > 0.0001f ? (-dir / dist) : Vector3.back,
+            hitDistance = dist
+        };
+        config?.TriggerVisuals(fxResult);
+        OnArenaHitscanFiredLocal?.Invoke(fxResult);
+    }
+
     private void FireHazmatAcidShot(PlayerController pc)
     {
         arenaAbilityCooldownTimer = 0.75f;
         arenaPrimaryMaxCooldown = 0.75f;
         hazmatGunRecoilTimer = 0.16f;
-        if (targetCamera == null) targetCamera = Camera.main;
-        if (targetCamera == null) return;
+        Camera aimCam = GetCharacterAimCamera(pc);
+        if (aimCam == null) return;
 
-        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-        Vector3 start = pc.transform.position + new Vector3(0f, 0.50f, 0f) + targetCamera.transform.forward * 0.55f + targetCamera.transform.right * 0.22f;
+        Vector3 start = pc.transform.position + new Vector3(0f, 0.50f, 0f) + aimCam.transform.forward * 0.55f + aimCam.transform.right * 0.22f;
 
-        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.36f, 65f, out Vector3 hitPoint);
-        Spawn3DBeamEffect(start, hitPoint, new Color(0.30f, 1.0f, 0.22f), 0.13f, 0.24f);
-        OnArenaAbilityFxLocal?.Invoke("ACID_SHOT", start, hitPoint);
+        HitscanResult hitResult = HitscanRayUtility.PerformHitscan(
+            aimCam,
+            start,
+            hazmatAcidShotHitscan,
+            IsOpponentHitbox,
+            c => c.GetComponent<PlayerController>() != null);
+        OnArenaHitscanFiredLocal?.Invoke(hitResult);
+        OnArenaAbilityFxLocal?.Invoke("ACID_SHOT", start, hitResult.endPoint);
 
-        if (hitOpponent)
+        if (hitResult.hitOpponent)
         {
             int dmg = 20 + Mathf.RoundToInt(remoteArenaMaxHP * 0.04f);
             DealDamageToOpponent(dmg, $"CORROSIVE ACID HIT ({dmg} DMG)!", 0f);
@@ -2533,24 +2577,28 @@ public class GridManager : MonoBehaviour
         arenaSecondaryCooldownTimer = hazmatSludgeCooldown;
         arenaSecondaryMaxCooldown = hazmatSludgeCooldown;
         hazmatGunRecoilTimer = 0.28f;
-        if (targetCamera == null) targetCamera = Camera.main;
-        if (targetCamera == null) return;
+        Camera aimCam = GetCharacterAimCamera(pc);
+        if (aimCam == null) return;
 
-        Vector3 aimForward = targetCamera.transform.forward;
+        Vector3 aimForward = aimCam.transform.forward;
         Vector3 flatForward = new Vector3(aimForward.x, 0f, aimForward.z);
         if (flatForward.sqrMagnitude < 0.001f) flatForward = pc.transform.forward;
         flatForward.Normalize();
         pc.ApplyKnockback(-flatForward * 6.5f, 4.0f, suppressLandingSlow: true);
 
-        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-        Vector3 start = pc.transform.position + new Vector3(0f, 0.50f, 0f) + targetCamera.transform.forward * 0.55f + targetCamera.transform.right * 0.22f;
+        Vector3 start = pc.transform.position + new Vector3(0f, 0.50f, 0f) + aimCam.transform.forward * 0.55f + aimCam.transform.right * 0.22f;
 
-        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.65f, 55f, out Vector3 hitPoint);
-        Spawn3DBeamEffect(start, hitPoint, new Color(0.45f, 1.0f, 0.25f), 0.24f, 0.30f);
-        Spawn3DAcidExplosionEffect(hitPoint);
-        OnArenaAbilityFxLocal?.Invoke("ACID_BURST", start, hitPoint);
+        HitscanResult hitResult = HitscanRayUtility.PerformHitscan(
+            aimCam,
+            start,
+            hazmatSludgeBlastHitscan,
+            IsOpponentHitbox,
+            c => c.GetComponent<PlayerController>() != null);
+        OnArenaHitscanFiredLocal?.Invoke(hitResult);
+        Spawn3DAcidExplosionEffect(hitResult.endPoint);
+        OnArenaAbilityFxLocal?.Invoke("ACID_BURST", start, hitResult.endPoint);
 
-        if (hitOpponent)
+        if (hitResult.hitOpponent)
         {
             soloBotKnockbackVelocity = Vector3.zero;
             remoteAbilityLockedTimer = hazmatDisruptDuration;
@@ -2663,17 +2711,21 @@ public class GridManager : MonoBehaviour
     {
         arenaAbilityCooldownTimer = 0.80f;
         arenaPrimaryMaxCooldown = 0.80f;
-        if (targetCamera == null) targetCamera = Camera.main;
-        if (targetCamera == null) return;
+        Camera aimCam = GetCharacterAimCamera(pc);
+        if (aimCam == null) return;
 
-        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-        Vector3 start = pc.transform.position + new Vector3(0f, 0.55f, 0f) + targetCamera.transform.forward * 0.45f;
+        Vector3 start = pc.transform.position + new Vector3(0f, 0.55f, 0f) + aimCam.transform.forward * 0.45f;
 
-        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.35f, 60f, out Vector3 hitPoint);
-        Spawn3DBeamEffect(start, hitPoint, new Color(1.0f, 0.92f, 0.32f), 0.12f, 0.22f);
-        OnArenaAbilityFxLocal?.Invoke("BEAM", start, hitPoint);
+        HitscanResult hitResult = HitscanRayUtility.PerformHitscan(
+            aimCam,
+            start,
+            moonflowerSolarBoltHitscan,
+            IsOpponentHitbox,
+            c => c.GetComponent<PlayerController>() != null);
+        OnArenaHitscanFiredLocal?.Invoke(hitResult);
+        OnArenaAbilityFxLocal?.Invoke("BEAM", start, hitResult.endPoint);
 
-        if (hitOpponent)
+        if (hitResult.hitOpponent)
         {
             if (remoteIsBucketParrying)
             {
@@ -2755,20 +2807,22 @@ public class GridManager : MonoBehaviour
             arenaPrimaryMaxCooldown = 0.90f;
         }
 
-        if (targetCamera == null) targetCamera = Camera.main;
-        if (targetCamera == null) return;
+        Camera aimCam = GetCharacterAimCamera(pc);
+        if (aimCam == null) return;
 
-        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-        Vector3 shotStart = pc.transform.position + new Vector3(0f, 0.52f, 0f) + targetCamera.transform.forward * 0.45f + targetCamera.transform.right * 0.18f;
+        Vector3 shotStart = pc.transform.position + new Vector3(0f, 0.52f, 0f) + aimCam.transform.forward * 0.45f + aimCam.transform.right * 0.18f;
+        HitscanAttackConfig config = isHeavyVolley ? roseHeavyVolleyHitscan : roseThornHitscan;
 
-        float radius = isHeavyVolley ? 0.48f : 0.32f;
-        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, radius, 65f, out Vector3 hitPoint);
-        Color col = isHeavyVolley ? new Color(1.0f, 0.08f, 0.55f) : new Color(1.0f, 0.15f, 0.38f);
-        float thick = isHeavyVolley ? 0.22f : 0.10f;
-        Spawn3DBeamEffect(shotStart, hitPoint, col, thick, 0.26f);
-        OnArenaAbilityFxLocal?.Invoke("THORN", shotStart, hitPoint);
+        HitscanResult hitResult = HitscanRayUtility.PerformHitscan(
+            aimCam,
+            shotStart,
+            config,
+            IsOpponentHitbox,
+            c => c.GetComponent<PlayerController>() != null);
+        OnArenaHitscanFiredLocal?.Invoke(hitResult);
+        OnArenaAbilityFxLocal?.Invoke("THORN", shotStart, hitResult.endPoint);
 
-        if (hitOpponent)
+        if (hitResult.hitOpponent)
         {
             int dmg = isHeavyVolley ? 45 : 25;
             if (remoteIsBucketParrying)
@@ -3001,11 +3055,11 @@ public class GridManager : MonoBehaviour
 
         if (fxType == "BEAM")
         {
-            Spawn3DBeamEffect(startPos, endPos, new Color(0.25f, 0.95f, 1.0f), 0.28f, 0.45f);
+            DispatchHitscanVisuals(moonflowerSolarBoltHitscan, startPos, endPos, false);
         }
         else if (fxType == "THORN")
         {
-            Spawn3DBeamEffect(startPos, endPos, new Color(1.0f, 0.15f, 0.38f), 0.10f, 0.22f);
+            DispatchHitscanVisuals(roseThornHitscan, startPos, endPos, false);
         }
         else if (fxType == "SLASH")
         {
@@ -3019,7 +3073,13 @@ public class GridManager : MonoBehaviour
         }
         else if (fxType == "PARRY")
         {
-            Spawn3DBeamEffect(startPos, startPos + Vector3.up * 2.2f, new Color(0.35f, 0.95f, 1.0f), 0.55f, 0.35f);
+            SpawnExpandingBurstExplosion(
+                "BucketParryFX",
+                startPos + Vector3.up * 0.9f,
+                new Color(0.55f, 0.95f, 1.0f),
+                new Color(0.25f, 0.85f, 1.0f),
+                new Color(0.85f, 0.95f, 1.0f),
+                endScale: 2.2f);
         }
         else if (fxType == "MOON_BURST")
         {
@@ -3027,11 +3087,11 @@ public class GridManager : MonoBehaviour
         }
         else if (fxType == "ACID_SHOT")
         {
-            Spawn3DBeamEffect(startPos, endPos, new Color(0.30f, 1.0f, 0.22f), 0.13f, 0.24f);
+            DispatchHitscanVisuals(hazmatAcidShotHitscan, startPos, endPos, false);
         }
         else if (fxType == "ACID_BURST")
         {
-            Spawn3DBeamEffect(startPos, endPos, new Color(0.45f, 1.0f, 0.25f), 0.24f, 0.30f);
+            DispatchHitscanVisuals(hazmatSludgeBlastHitscan, startPos, endPos, false);
             Spawn3DAcidExplosionEffect(endPos);
         }
     }
@@ -3123,24 +3183,6 @@ public class GridManager : MonoBehaviour
         anim.duration = 0.36f;
         anim.startScale = 0.45f;
         anim.endScale = endScale;
-    }
-
-    private void Spawn3DBeamEffect(Vector3 start, Vector3 end, Color color, float thickness, float duration)
-    {
-        if (arena3DRoot == null) return;
-        Vector3 diff = end - start;
-        float len = diff.magnitude;
-        if (len < 0.05f) return;
-
-        GameObject beam = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        beam.name = "ArenaBeamFX";
-        beam.transform.SetParent(arena3DRoot.transform, true);
-        beam.transform.position = start + diff * 0.5f;
-        beam.transform.up = diff.normalized;
-        beam.transform.localScale = new Vector3(thickness, len * 0.5f, thickness);
-        DestroyCollider(beam);
-        beam.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(color);
-        Destroy(beam, duration);
     }
 
     private void Spawn3DDurianSpikeBurstEffect(Vector3 center, Quaternion viewRot)

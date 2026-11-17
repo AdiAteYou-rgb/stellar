@@ -1,12 +1,12 @@
 ---
 name: unity-unitask-triggers
-description: "AsyncTriggerBase and MonoBehaviour lifecycle-to-UniTask extensions — GetAsyncStartTrigger / OnDestroyAsync / OnCollisionEnterAsync / OnClickAsync / OnTriggerEnterAsync, AsyncTriggerExtensions, GetCancellationTokenOnDestroy internals. AsyncTriggerBase 与 MonoBehaviour 生命周期转 UniTask 的扩展——GetAsyncStartTrigger/OnDestroyAsync/OnCollisionEnterAsync/OnClickAsync/OnTriggerEnterAsync、AsyncTriggerExtensions、GetCancellationTokenOnDestroy 内部机制。"
+description: "AsyncTriggerBase and MonoBehaviour lifecycle-to-UniTask extensions — GetAsyncStartTrigger / OnDestroyAsync / OnCollisionEnterAsync / OnClickAsync / OnTriggerEnterAsync, AsyncTriggerExtensions, GetCancellationTokenOnDestroy internals."
 type: reference
 ---
 
 # UniTask Triggers
 
-Sub-doc of [unitask-design](./SKILL.md). Triggers let you `await` Unity lifecycle events and UI callbacks as UniTasks / AsyncEnumerables. Source lives in `Runtime/Triggers/*.cs`.
+Sub-doc of [unitask-design](./MODULE.md). Triggers let you `await` Unity lifecycle events and UI callbacks as UniTasks / AsyncEnumerables. Source lives in `Runtime/Triggers/*.cs`.
 
 ## Core types
 

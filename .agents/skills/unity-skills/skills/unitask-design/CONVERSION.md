@@ -1,12 +1,12 @@
 ---
 name: unity-unitask-conversion
-description: "UniTask interop — AsyncOperation.ToUniTask, UnityWebRequest.SendWebRequest().ToUniTask, IEnumerator.ToUniTask, Task.AsUniTask, UniTask.AsTask, UniTask.ToCoroutine. When each conversion is correct, when it leaks progress callbacks or throws. UniTask 互操作——AsyncOperation.ToUniTask、UnityWebRequest.SendWebRequest().ToUniTask、IEnumerator.ToUniTask、Task.AsUniTask、UniTask.AsTask、UniTask.ToCoroutine;各转换何时正确、何时泄漏进度回调或抛异常。"
+description: "UniTask interop — AsyncOperation.ToUniTask, UnityWebRequest.SendWebRequest().ToUniTask, IEnumerator.ToUniTask, Task.AsUniTask, UniTask.AsTask, UniTask.ToCoroutine. When each conversion is correct, when it leaks progress callbacks or throws."
 type: reference
 ---
 
 # UniTask Conversion & Interop
 
-Sub-doc of [unitask-design](./SKILL.md). Covers every bridge between UniTask and Unity's legacy `AsyncOperation` / `Coroutine`, and between UniTask and `System.Threading.Tasks.Task`.
+Sub-doc of [unitask-design](./MODULE.md). Covers every bridge between UniTask and Unity's legacy `AsyncOperation` / `Coroutine`, and between UniTask and `System.Threading.Tasks.Task`.
 
 ## `AsyncOperation.ToUniTask`
 

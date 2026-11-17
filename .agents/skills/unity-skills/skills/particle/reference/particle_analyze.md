@@ -1,0 +1,18 @@
+### particle_analyze
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `name` | string | No | null | GameObject name (`entityId` preferred) |
+| `path` | string | No | null | Hierarchy path |
+| `instanceId` | int | No | 0 | Instance ID (older Unity only) |
+| `rootName` | string | No | null | Root GameObject name |
+| `rootPath` | string | No | null | Root hierarchy path |
+| `rootInstanceId` | int | No | 0 | Root instance ID (older Unity only) |
+| `entityId` | string | No | null | One system (or `name` / `path` / `instanceId`) |
+| `rootEntityId` | string | No | null | Every system under this object (also `rootName` / `rootPath` / `rootInstanceId`); not with a single system |
+| `includeInactive` | bool | No | true | Include inactive objects |
+| `limit` | int | No | 100 | Findings returned, 1-500, most severe first |
+| `thresholdsJson` | string | No | null | Overrides, e.g. `{"maxParticlesPerSystem": 5000}` |
+
+Omit every locator to analyze the open scenes. Static checks only (no frame times, GPU cost or overdraw); nothing is changed.
+
+**Returns**: `{scope, systemsAnalyzed, totalMaxParticles, findingCount, counts: {error, warning, info}, findings: [{code, severity, system, field, message, evidence?, fix?: {skill, reason, args?}}], truncated, thresholds}`

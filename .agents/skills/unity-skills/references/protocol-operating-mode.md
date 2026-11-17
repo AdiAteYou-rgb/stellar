@@ -1,6 +1,6 @@
 # Protocol: Operating Mode (v1.9.0+)
 
-Operating mode is a **server-side permission gate**, configured in the Unity panel (`Window > UnitySkills` → ⚙ Settings → Server section) and persisted in EditorPrefs per-machine. It is not an AI routing policy and **cannot** be switched via chat or REST — chat-side trigger words no longer apply.
+Operating mode is a **server-side permission gate**, configured in the Unity panel (`Window > UnitySkills` → ⚙ Settings → Server section) and persisted **per project** in `UserSettings/UnitySkills/settings.json` (per user, not in version control; a project never changed since upgrading keeps the value older versions stored machine-wide). The Allowlist, `RequireConfirmation`, the surface profile and the token-level settings are per project too, so two Unity instances can report different values. It is not an AI routing policy and **cannot** be switched via chat or REST — chat-side trigger words no longer apply.
 
 ## Boot Handshake
 
@@ -39,7 +39,7 @@ Several Unity projects can run UnitySkills at once; each server takes the first 
 
 Quitting the Editor removes its entry. A `reloading` or `stopped` entry has no heartbeat, so it is dropped only when its process is gone (or, after 30 minutes, when its pid has been reused by another program).
 
-**During a domain reload** (script, package or define change) the port answers `503` (`COMPILING` / `SERVER_STOPPED`) or refuses connections for a few seconds. Retry the same port — or follow the entry if the Editor comes back on another port — and never switch to a different project's Editor. A `GET /jobs/<id>?wait=` long poll survives the reload as well; see [observability](protocol-observability.md).
+**During a domain reload** (script, package or define change) the port answers `503` (`COMPILING` / `SERVER_STOPPED`) or refuses connections for a few seconds. A `503` never ran, so resend it; a `504` may have run, so check a write's outcome instead of resending it (see [error codes](protocol-error-codes.md#domain-reload-and-server-stop)). Retry the same port — or follow the entry if the Editor comes back on another port — and never switch to a different project's Editor. A `GET /jobs/<id>?wait=` long poll survives the reload as well; see [observability](protocol-observability.md).
 
 - **Python client** — when the cwd lies inside a registered project, or you pass `target=`, the client pins that instance: every request carries `X-Expect-Instance`, and while it reloads or restarts the client waits for it on its own port (following it if the port moves) for up to the server's request timeout (`requestTimeoutMinutes` from the last `/health` it read; 120 s before any), then fails rather than switching projects. Only when the cwd belongs to no registered project, or that project's Editor is gone, does it try the other live entries by freshest heartbeat, then a port scan. `python unity_skills.py --list-instances` prints every registry entry with its `status`; pin a choice with `--port <n>` (or `--version "6"` / `"2022"`) when more than one instance is live or the cwd is outside the project.
 - **Bare HTTP** — take the port from the task, the registry or `/health` on each port; never assume `8090`. Add `expectProject` / `expectInstance` to every write.
@@ -47,7 +47,7 @@ Quitting the Editor removes its entry. A `reloading` or `stopped` entry has no h
 
 ## Surface profile
 
-`surfaceProfile` (on `/health`, and on recommend or listing envelopes when it is not `full`) says which slice of the skill surface the user exposed. Only the user can switch it, in the UnitySkills panel; `guideMode` is a legacy boolean, `surfaceProfile` is authoritative.
+`surfaceProfile` (on `/health`, and on recommend or listing envelopes when it is not `full`) says which slice of the skill surface the user exposed. Only the user can switch it, per project, in the UnitySkills panel; `guideMode` is a legacy boolean, `surfaceProfile` is authoritative.
 
 | Profile | Hidden | What to do |
 |---|---|---|
@@ -78,7 +78,7 @@ Never gated: `supportsDryRun:false` skills, skills with their own `confirmToken`
 
 ## Token Level
 
-`tokenLevel` on `/health` is a **derived** view, not a separate persisted setting — it is computed from three source values every time it's read: `surfaceProfile` (see "Surface profile" above), `summaryAutoTruncate`, and `summaryPageSize`. Changing any of the three source values immediately changes the reported `tokenLevel`; there is no separate "set token level" call.
+`tokenLevel` on `/health` is a **derived** view, not a separate persisted setting — it is computed from three per-project source values every time it's read: `surfaceProfile` (see "Surface profile" above), `summaryAutoTruncate`, and `summaryPageSize`. Changing any of the three source values immediately changes the reported `tokenLevel`; there is no separate "set token level" call.
 
 | `tokenLevel` | `surfaceProfile` | `summaryAutoTruncate` | `summaryPageSize` |
 |---|---|---|---|
@@ -88,7 +88,7 @@ Never gated: `supportsDryRun:false` skills, skills with their own `confirmToken`
 | `maximum` | `full` | `false` | (ignored — pagination is inactive while truncation is off) |
 | `custom` | any other combination of the three source values | | |
 
-What `summaryAutoTruncate` / `summaryPageSize` actually do: in brief mode (`verbose` not `true`), if a skill's response contains an array (top-level, or nested under `items` / `assets` / `objects` / `groups` / `entries`) longer than `summaryPageSize`, the response is wrapped with `isTruncated: true`, `totalCount`, `showing`, and only the first `summaryPageSize` items. Page through the rest with `pageOffset` / `pageLimit` (or pass `verbose=true` to skip pagination and get everything at once). Explicit `pageOffset`/`pageLimit` always page the response, even when `summaryAutoTruncate` is `false`.
+What `summaryAutoTruncate` / `summaryPageSize` actually do: in brief mode (`verbose: false`, which the Python client sends by default; a REST body without `verbose` is never truncated automatically), if a skill's response contains an array (top-level, or nested under `items` / `assets` / `objects` / `groups` / `entries`) longer than `summaryPageSize`, the response is wrapped with `isTruncated: true`, `totalCount`, `showing`, and only the first `summaryPageSize` items. Page through the rest with `pageOffset` / `pageLimit` (or pass `verbose=true` without paging keys to get everything at once). Explicit paging keys (`pageOffset` / `pageLimit`, or `offset` / `limit` on a skill that declares no parameter of that name) always page the response, whatever `verbose` says and even when `summaryAutoTruncate` is `false`. They also page a list under any other name when it is the only top-level array the skill declares in its outputs (e.g. `prefab_find_instances`' `instances`); when there is no such single list, the result carries `pagingIgnored` saying why nothing was paged.
 
 ## Three Modes (aligned with Claude Code permission modes)
 
@@ -100,7 +100,7 @@ What `summaryAutoTruncate` / `summaryPageSize` actually do: in brief mode (`verb
 | **Auto** | ≈ `acceptEdits` | Executes directly (audit written); **you must self-assess** sensitive cases | `MODE_FORBIDDEN` |
 | **Bypass** | ≈ `bypassPermissions` | Executes directly | Executes directly (only `ConfirmationToken` still gates high-risk) |
 
-`NeverInSemi` is derived automatically by `IsForbiddenInSemi()` — there is no manual marker. See "Skill Mode Annotation" below.
+`NeverInSemi` is derived automatically by `IsForbiddenInSemi()` — there is no manual marker. See "Skill Mode Annotation" below. Every schema and recommend entry states the verdict as `approvalBehavior`: `forbid` (NeverInSemi: `MODE_FORBIDDEN` under Auto and Approval), `grant` (FullAuto: a grant under Approval, direct under Auto) or `allow` (SemiAuto: direct in every mode). The Allowlist and Bypass lift `forbid`.
 
 **Previewing the gate.** A dryRun (`POST /skill/<name>?mode=dryRun`) shows the verdict without consuming a grant or writing an audit entry: its top-level `authorization` is `{allowed, blockedBy, currentMode, allowlisted, hint}` (plus `surfaceProfile` when `blockedBy` is `SURFACE_EXCLUDED`), and `blockedBy` is `MODE_RESTRICTED`, `MODE_FORBIDDEN`, `SURFACE_EXCLUDED`, or null when the call would run. It is a prediction, not a reservation: the mode or the Allowlist can change before the execute call. The root `SKILL.md` asks for a dryRun first in approval mode for this reason.
 
@@ -125,7 +125,7 @@ On `MODE_RESTRICTED`, branch on `details.approvalChannel`:
 
 > Note: panel approval no longer auto-routes the result back to the AI. The Approve click only flips the request into the Granted state; AI must follow up with one `/permission/grant` call to fetch the execution result.
 
-On `MODE_FORBIDDEN`: the skill is auto-classified as NeverInSemi (Delete / Domain Reload / Play Mode / high-risk). It is callable only under Bypass, **or** if the user has explicitly added it to the Allowlist (see below). **Do not attempt the grant flow** — tell the user the action requires Bypass mode, an Allowlist entry, or offer an alternative skill.
+On `MODE_FORBIDDEN` (under Auto or Approval): the skill is auto-classified as NeverInSemi (Delete / Domain Reload / Play Mode / high-risk). It is callable only under Bypass, **or** if the user has explicitly added it to the Allowlist (see below); `details.hint` says the same. **Do not attempt the grant flow** — tell the user the action requires Bypass mode or an Allowlist entry, or offer an alternative that does not do the same thing.
 
 ## Allowlist (user-managed permanent bypass)
 
@@ -142,13 +142,13 @@ The Allowlist is a **user-managed** permanent whitelist of skill names, configur
 
 ## Auto Mode Self-Assessment
 
-Under Auto, FullAuto skills run directly. You **must pause and confirm with the user** in chat when any of the following apply:
+Under Auto, FullAuto skills run directly, except the NeverInSemi ones (`approvalBehavior: "forbid"`), which answer `MODE_FORBIDDEN` until the user switches to Bypass or allowlists them. For the skills that do run, you **must pause and confirm with the user** in chat when any of the following apply:
 
 - Batch operation touching ≥ `5` objects
 - Prefab apply / scene-level mutation / asset overwrite
 - Dry-run shows irreversible changes (deletes, overrides, cascading edits)
 
-This confirmation is a chat-level check (explain plan + risk + ask), independent of the server-side mode gate. The server will not stop you in Auto — the audit log records the call regardless.
+This confirmation is a chat-level check (explain plan + risk + ask), independent of the server-side mode gate: apart from `MODE_FORBIDDEN`, the server will not stop you in Auto — the audit log records the call regardless.
 
 ## Relationship with `ConfirmationTokenService`
 
@@ -161,7 +161,7 @@ Mode authorization (persistent, per-skill) and `ConfirmationToken` (single-shot,
 
 ## Skill Mode Annotation
 
-The REST surface (`839` skills) is partitioned by `[UnitySkill]` `Mode` and runtime metadata. Use schema endpoints for the canonical list:
+The REST surface is partitioned by `[UnitySkill]` `Mode` and runtime metadata. Use schema endpoints for the canonical list:
 
 | Annotation | Count | Source |
 |---|---|---|
@@ -172,4 +172,4 @@ The REST surface (`839` skills) is partitioned by `[UnitySkill]` `Mode` and runt
 SemiAuto (read/query/analyze) skills are directly callable in every mode and span the modules below; use `GET /skills?category=<Category>` for the exact list (write skills in the same modules stay FullAuto):
 
 - **script** (`script_read` / `script_list` / `script_get_info` / `script_find_in_file` / `script_get_compile_feedback`) · **perception** (`scene_analyze` / `scene_context` / `scene_health_check` / `scene_find_hotspots` / `project_stack_detect` — the module is named perception but its skills carry the `scene_*` prefix) · **scene** (`scene_get_info` / `scene_get_hierarchy` / `scene_get_loaded` / `scene_find_objects`) · **editor** (`editor_get_context` / `editor_get_state` / `editor_get_selection` / `editor_get_tags` / `editor_get_layers`) · **asset** (`asset_find` / `asset_get_info`) · **workflow** (`workflow_list` / `workflow_session_*` / `workflow_plan` — prefer workflow & batch helpers for planning/preview/jobs/rollback) · **debug + console** (`debug_check_compilation` / `debug_get_errors` / `debug_get_system_info` / `debug_get_memory_info` / `debug_get_logs` / `console_get_logs`)
-- plus most modules' own info / list / get / find skills. **Advisory**: `29` docs-only modules (design guides, `manual-*`, `unity-cli`; no REST skills) — see the module index in `skills/SKILL.md`.
+- plus most modules' own info / list / get / find skills. **Advisory**: `30` docs-only modules (design guides, `manual-*`, `unity-cli`; no REST skills) — see the module index in `skills/INDEX.md`.

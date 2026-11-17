@@ -1,12 +1,12 @@
 ---
 name: unity-unitask-playerloop
-description: "PlayerLoopTiming (16 values 2020.2+), UniTask.Yield / NextFrame / Delay / DelayFrame / WaitForEndOfFrame / WaitForFixedUpdate, DelayType, frame-ordering semantics and coroutine interop. PlayerLoopTiming(2020.2+ 共 16 个值)、UniTask.Yield/NextFrame/Delay/DelayFrame/WaitForEndOfFrame/WaitForFixedUpdate、DelayType、帧序语义与协程互操作。"
+description: "PlayerLoopTiming (16 values 2020.2+), UniTask.Yield / NextFrame / Delay / DelayFrame / WaitForEndOfFrame / WaitForFixedUpdate, DelayType, frame-ordering semantics and coroutine interop. PlayerLoopTiming(2020.2+."
 type: reference
 ---
 
 # UniTask PlayerLoop & Timing
 
-Sub-doc of [unitask-design](./SKILL.md). Everything here maps to `PlayerLoopHelper.cs`, `UniTask.Delay.cs`, and Unity's player loop order.
+Sub-doc of [unitask-design](./MODULE.md). Everything here maps to `PlayerLoopHelper.cs`, `UniTask.Delay.cs`, and Unity's player loop order.
 
 ## `PlayerLoopTiming` — full enum
 

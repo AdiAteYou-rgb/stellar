@@ -7,25 +7,26 @@
 `GET /skills/recommend?intent=<words>&includeSchema=true&topN=3&wire=v2` returns scored candidates with their parameter schemas.
 
 - `topN` caps the candidates (default `10`, clamped `1`–`50`). Measured over 8 intents, `topN=3` cuts the answer by about 68% against the default, `wire=v2` by about 14%, both together by about 72%; a `topN=3&wire=v2` answer is typically 1–4 KB.
+- Query strings split on `&` and on any `?` after the first, so a literal `?` (or `&`) inside a value, such as an intent, must be written `%3F` (`%26`).
 - Several needs in one task: repeat `intent=` (`?intent=move+object&intent=light+color&includeSchema=true&topN=3&wire=v2`). Each intent is ranked on its own with the same `topN` / `includeSchema` / `wire`, and the answer becomes `{topN, includeSchema, …, intents:[{intent, expandedKeywords, totalMatches, results}]}`. A single distinct intent keeps the single-intent shape `{intent, expandedKeywords, topN, includeSchema, totalMatches, results}`.
 - A result carries `name`, `description`, `category`, `score`, `semanticScore`, `confidence`, `matchedOn`, optional `telemetry` / `warnings`, and `schema` when `includeSchema=true`. `unavailable` (with `missingPackages`) marks a skill whose optional package is not installed: calling it answers `MISSING_PACKAGE`, so the marker already settles availability (while the package list is still loading, nothing is marked).
 - Skills hidden by the surface profile are left out of the ranking. Under a profile other than `full` the envelope adds `surfaceProfile` and `surfaceProfileHint`: a skill missing from the results may be hidden rather than nonexistent.
-- Skills are named `module_verb` (`<module>_<action>`, `_batch` for the multi-object twin), so the prefix is the routing key. The [module index](../skills/SKILL.md) lists every module, including the docs-only ones (`manual-*`, `*-design`, `unity-cli`).
+- Skills are named `module_verb` (`<module>_<action>`, `_batch` for the multi-object twin), so the prefix is the routing key. The [module index](../skills/INDEX.md) lists every module, including the docs-only ones (`manual-*`, `*-design`, `unity-cli`).
 
 ## Exact signatures by name
 
-`GET /skills/schema?names=a,b&wire=v2` returns only the named skills (~2–3 KB for two or three). The answer says `filtered:true`; a server that predates the filter ignores `names=` and returns the whole schema, so check it. Selector-like keys the filter grammar does not have (`skill`, `skills`, `name`, `id`, …) answer 400 `UNKNOWN_PARAM` pointing at `names=` / `q=`.
+`GET /skills/schema?names=a,b&wire=v2` returns only the named skills (~4–7 KB for two or three). The answer says `filtered:true`; a server that predates the filter ignores `names=` and returns the whole schema, so check it. Selector-like keys the filter grammar does not have (`skill`, `skills`, `name`, `id`, …) answer 400 `UNKNOWN_PARAM` pointing at `names=` / `q=`.
 
 ## Wider layers
 
 | Layer | Endpoint | Size | Use when |
 |---|---|---|---|
-| directory | `GET /skills` | ~21 KB | Names by category only, to locate a module. `?full=1` is the complete listing (~707 KB). |
-| category | `GET /skills/schema?category=<Category>&wire=v2` | ~11–14 KB for GameObject / Component (v1 ~25–29 KB) | The task stays in one or two areas. |
-| summary | `GET /skills?summary=1` | ~180 KB | Exploratory or cross-module work, when the cheaper layers left you unsure. |
-| full schema | `GET /skills/schema` | ~707 KB (v2 ~523 KB) | Rare: many modules' signatures at once. |
+| directory | `GET /skills` | ~23 KB | Names by category only, to locate a module. `?full=1` is the complete listing (~853 KB). |
+| category | `GET /skills/schema?category=<Category>&wire=v2` | ~20–21 KB for GameObject / Component (v1 ~36–37 KB) | The task stays in one or two areas. |
+| summary | `GET /skills?summary=1` | ~220 KB | Exploratory or cross-module work, when the cheaper layers left you unsure. |
+| full schema | `GET /skills/schema` | ~853 KB (v2 ~658 KB) | Rare: many modules' signatures at once. |
 
-All layers are server-cached with ETag / `304`; send `Accept-Encoding: gzip`. The sizes were measured on the 805-skill build and grow with the skill count and parameter notes.
+All layers are server-cached with ETag / `304`; send `Accept-Encoding: gzip`. The sizes were measured on the 873-skill build and grow with the skill count and parameter notes.
 
 ## Wire format v2 (`?wire=v2`)
 
@@ -33,8 +34,9 @@ All layers are server-cached with ETag / `304`; send `Accept-Encoding: gzip`. Th
 
 - A **`flags`** array replaces v1's six booleans and adds v2-only `longRunning`: `readOnly`, `tracksWorkflow`, `mutatesScene`, `mutatesAssets`, `mayTriggerReload`, `mayEnterPlayMode`, `longRunning`. An absent flag is false.
 - **Omitted means default**: `riskLevel` appears only when it is not `"low"`, `supportsDryRun` only when it is `false`, and null members are dropped, so an absent key is never null.
+- A **`doc`** string on a skill entry is the module doc path relative to the skill root, present only when that module has multi-skill workflow rules a schema cannot express. Read that doc before chaining the module's skills; most entries have no `doc`.
 - Every v2 response carries a **`defaults`** block (`{"riskLevel":"low","supportsDryRun":true}`) and a `metaUrl`; take the rule from the payload.
-- A v2 dryRun keeps every verdict field (`valid`, `validation`, `impact`, `authorization`, `steps`, `changes`) and slims the echo: `skill` shrinks to name, category, operation, mode, riskLevel, longRunning and flags, and `parameters` lists only what you sent plus required parameters still missing.
+- A v2 dryRun keeps every verdict field (`valid`, `validation`, `impact`, `authorization`, `steps`, `changes`) and slims the echo: `skill` shrinks to name, category, operation, mode, riskLevel, longRunning and flags, and `parameters` lists only what you sent plus required parameters still missing. Its `note` says what `valid:true` proves: no validation errors (`warnings` never block); for a skill without a semantic planner it adds that the target was not looked up, so `valid:true` does not prove the object exists.
 - On `/skills/batch`, a dry run returns v2 step payloads; executed steps return the skills' own results either way.
 - Measured savings: about 52–55% on category schemas, 26% on the full schema, 14% on recommend, 91% on `/skills/meta`.
 
@@ -44,4 +46,4 @@ All layers are server-cached with ETag / `304`; send `Accept-Encoding: gzip`. Th
 
 ## Python client
 
-`unity_skills.find_skills(intent, top_n=3, include_schema=True, wire="v2")` is the root doc's default call (the function's own defaults are `top_n=10`, `include_schema=False`, v1). `unity_skills.get_skill_schema()` fetches the **full** schema; prefer recommend or a scoped `GET /skills/schema`. `unity_skills.get_meta()` caches `/skills/meta` for the session.
+`unity_skills.find_skills(intent, top_n=3, include_schema=True, wire="v2")` is the root doc's default call (the function's own defaults are `top_n=10`, `include_schema=False`, v1). `unity_skills.get_skill_schema()` fetches the **full** schema; prefer recommend or a scoped `GET /skills/schema`. `unity_skills.get_meta()` caches `/skills/meta` for the session. `unity_skills.search_skills("keyword")` greps the cached summary locally and returns only the matching `{name, category, description}` entries, so the ~180 KB summary stays out of your context. These are client functions, not skills: sending a helper name to `POST /skill/<name>` answers `SKILL_NOT_FOUND`.

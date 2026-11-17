@@ -1,6 +1,6 @@
 ---
 name: unity-yooasset-pitfalls
-description: "YooAsset pitfalls checklist (v2.3.18) — the 30 mistakes AI agents most often introduce, plus a legacy-API migration list of pre-2.3.18 calls to avoid. YooAsset 陷阱清单(v2.3.18:AI 最易引入的 30 个错误,以及 2.3.18 之前不可再用的旧 API 迁移清单)。"
+description: "YooAsset pitfalls checklist (v2.3.18) — the 30 mistakes AI agents most often introduce, plus a legacy-API migration list of pre-2.3.18 calls to avoid."
 type: reference
 ---
 
@@ -65,7 +65,7 @@ A separate `## Legacy API migration` section at the bottom lists pre-2.3.18 call
 
 ### ❌ P10. `CustomPlayMode.FileSystemParameterList` with the main FS not at the end
 - Symptom: the earlier FS is used as the main; lookups fall through
-- Source: `Runtime/InitializeParameters.cs:107-109` docstring ("列表最后一个元素作为主文件系统")
+- Source: `Runtime/InitializeParameters.cs:107-109` docstring: the last element of the list is the main file system
 - ✅ Fix: append the main FS last
 
 ---
@@ -215,4 +215,4 @@ These are frequent training-data hallucinations. If you catch yourself typing on
 | `package.LoadSceneAsync(location, LoadSceneMode.Additive, addToBuild: true)` | There is no `addToBuild` parameter; build inclusion is decided by the bundle layout. | `package.LoadSceneAsync(location, LoadSceneMode.Additive, LocalPhysicsMode.None, suspendLoad: false)` |
 | `initParams.UnpackingPath = "…"` | Field does not exist on `InitializeParameters`. | Set `FileSystemParametersDefine.UNPACK_FILE_SYSTEM_ROOT` (added 2.3.18) on the buildin FS parameters |
 
-Source for every "why it's wrong" claim: the files listed in the main [SKILL.md](./SKILL.md) rule table plus `CHANGELOG.md`. When in doubt, grep the Runtime or Editor directory before emitting code.
+Source for every "why it's wrong" claim: the files listed in the main [MODULE.md](./MODULE.md) rule table plus `CHANGELOG.md`. When in doubt, grep the Runtime or Editor directory before emitting code.

@@ -1,12 +1,12 @@
 ---
 name: unity-shadergraph-versions
-description: "Shader Graph version matrix — the validated Unity/ShaderGraph versions, kept to stop version hallucination. Shader Graph 版本矩阵(已验证的 Unity/ShaderGraph 版本,用于杜绝版本幻觉)。"
+description: "Shader Graph version matrix — the validated Unity/ShaderGraph versions, kept to stop version hallucination."
 type: reference
 ---
 
 # Version Matrix
 
-Sub-doc of [shadergraph-design](./SKILL.md). This file exists to stop version hallucination.
+Sub-doc of [shadergraph-design](./MODULE.md). This file exists to stop version hallucination.
 
 ## Validated Versions
 
