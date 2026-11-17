@@ -163,6 +163,7 @@ public class MultiplayerMenuManager : MonoBehaviour
         gameplayWallGrid.OnArenaPoseLocal -= HandleArenaPose;
         gameplayWallGrid.OnArenaResolvedLocal -= HandleArenaResolved;
         gameplayWallGrid.OnArenaStunLocal -= HandleArenaStun;
+        gameplayWallGrid.OnArenaDisruptLocal -= HandleArenaDisrupt;
         gameplayWallGrid.OnArenaAbilityFxLocal -= HandleArenaAbilityFx;
         gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
         gameplayWallGrid.OnArenaAttackHitLocal -= HandleArenaAttackHit;
@@ -180,6 +181,7 @@ public class MultiplayerMenuManager : MonoBehaviour
         gameplayWallGrid.OnArenaPoseLocal += HandleArenaPose;
         gameplayWallGrid.OnArenaResolvedLocal += HandleArenaResolved;
         gameplayWallGrid.OnArenaStunLocal += HandleArenaStun;
+        gameplayWallGrid.OnArenaDisruptLocal += HandleArenaDisrupt;
         gameplayWallGrid.OnArenaAbilityFxLocal += HandleArenaAbilityFx;
         gameplayWallGrid.OnArenaSeedLocal += HandleArenaSeed;
         gameplayWallGrid.OnArenaAttackHitLocal += HandleArenaAttackHit;
@@ -203,6 +205,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             gameplayWallGrid.OnArenaPoseLocal -= HandleArenaPose;
             gameplayWallGrid.OnArenaResolvedLocal -= HandleArenaResolved;
             gameplayWallGrid.OnArenaStunLocal -= HandleArenaStun;
+            gameplayWallGrid.OnArenaDisruptLocal -= HandleArenaDisrupt;
             gameplayWallGrid.OnArenaAbilityFxLocal -= HandleArenaAbilityFx;
             gameplayWallGrid.OnArenaSeedLocal -= HandleArenaSeed;
             gameplayWallGrid.OnArenaAttackHitLocal -= HandleArenaAttackHit;
@@ -940,6 +943,11 @@ public class MultiplayerMenuManager : MonoBehaviour
                 float dur = PF(msg.Substring(6));
                 gameplayWallGrid.ApplyLocalArenaImmobilize(dur);
             }
+            else if (msg.StartsWith("ADISRUPT:"))
+            {
+                float dur = PF(msg.Substring(9));
+                gameplayWallGrid.ApplyLocalArenaDisrupt(dur);
+            }
             else if (msg.StartsWith("AHIT:"))
             {
                 string[] p = msg.Substring(5).Split(',');
@@ -1023,6 +1031,11 @@ public class MultiplayerMenuManager : MonoBehaviour
     private void HandleArenaStun(float duration)
     {
         SendNetworkMessage($"ASTUN:{F(duration)}");
+    }
+
+    private void HandleArenaDisrupt(float duration)
+    {
+        SendNetworkMessage($"ADISRUPT:{F(duration)}");
     }
 
     private void HandleArenaAttackHit(int damage, float stunDuration)
@@ -1933,10 +1946,10 @@ public class MultiplayerMenuManager : MonoBehaviour
         GUI.Box(new Rect(0f, 0f, sw, sh), GUIContent.none);
         GUI.color = prev;
 
-        Rect modalRect = new Rect(centerX - 360f, centerY - 260f, 720f, 520f);
+        Rect modalRect = new Rect(centerX - 360f, centerY - 280f, 720f, 560f);
         DrawPanelBox(modalRect, new Color(0.08f, 0.12f, 0.18f, 0.98f), new Color(0.35f, 0.85f, 1.0f, 0.9f));
 
-        GUI.Label(new Rect(centerX - 330f, centerY - 235f, 660f, 36f), "HOW TO PLAY & GAME RULES", s_ModalTitleStyle);
+        GUI.Label(new Rect(centerX - 330f, centerY - 255f, 660f, 36f), "HOW TO PLAY & GAME RULES", s_ModalTitleStyle);
 
         string guideContent =
             "🌿 PLANT DEFENDER GOAL:\n" +
@@ -1948,16 +1961,19 @@ public class MultiplayerMenuManager : MonoBehaviour
             "🧟 ZOMBIE INVADER GOAL:\n" +
             "• Earn Brains every 10 seconds. Spawn zombies in the rightmost 2 columns.\n" +
             "• [4] Zombie (50 Brains): Walks forward toward the red defense line.\n" +
+            "• [5] Buckethead (100 Brains): Heavy 5x HP tank with Iron Bucket Parry in 3D.\n" +
+            "• [6] Bunny Speed (75 Brains): Fast hopping rusher with Bunny Slide in 3D.\n" +
+            "• [7] Hazmat Spitter (100 Brains): Spits ranged acid in 2D & melts tanks in 3D.\n" +
             "• If any Zombie crosses the Red Defense Line on the left, Zombies Win!\n\n" +
             "⚔️ 3D 1v1 ARENA CLASH:\n" +
             "• When a Zombie collides with any Plant, the 2D world pauses immediately!\n" +
             "• You are transported into a 3D first-person clash arena to fight!\n" +
             "• Controls: WASD to Move & Tilt, Space to Jump, Backspace to return to 2D Wall.";
 
-        GUI.Label(new Rect(centerX - 330f, centerY - 185f, 660f, 340f), guideContent, s_ModalGuideText);
+        GUI.Label(new Rect(centerX - 330f, centerY - 205f, 660f, 385f), guideContent, s_ModalGuideText);
 
         GUI.backgroundColor = new Color(0.24f, 0.88f, 0.38f);
-        if (GUI.Button(new Rect(centerX - 130f, centerY + 185f, 260f, 48f), "GOT IT! CLOSE GUIDE", s_ModalBtnStyle))
+        if (GUI.Button(new Rect(centerX - 130f, centerY + 198f, 260f, 48f), "GOT IT! CLOSE GUIDE", s_ModalBtnStyle))
         {
             showHowToPlayModal = false;
         }

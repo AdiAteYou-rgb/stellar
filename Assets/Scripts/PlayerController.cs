@@ -49,15 +49,34 @@ public class PlayerController : MonoBehaviour
 
     [Header("Durian Roll Camera & Turn Settings")]
     [SerializeField] private float normalFov = 75f;
-    [SerializeField] private float durianRollFov = 58f;
-    [SerializeField] private float durianRollTurnMultiplier = 0.38f;
+    [SerializeField] private float durianRollFov = 64f;
+    [SerializeField] private float durianRollTurnMultiplier = 0.45f;
     [SerializeField] private float durianRollSpeedMultiplier = 1.65f;
+    [SerializeField] private float durianRollSteerYawSpeed = 62f;
+    [SerializeField] private float durianRollSpinSpeed = 540f;
+    [SerializeField] private float durianRollBaseDip = -0.32f;
+    [SerializeField] private float durianRollBobVerticalAmp = 0.12f;
+    [SerializeField] private float durianRollBobLateralAmp = 0.045f;
+    [SerializeField] private float durianRollBobForwardAmp = 0.03f;
+    [SerializeField] private float durianRollPitchBobAmp = 7.0f;
+    [SerializeField] private float durianRollWobbleTiltAmp = 4.5f;
+    [SerializeField] private float durianRollTurnBankMax = 12.0f;
 
     public bool IsImmobilized => immobilizedTimer > 0f;
+    public float DurianRollAngleDeg => durianRollAngleDeg;
+    public float DurianRollVisualBounceY => currentDurianVisualBounceY;
+    public float DurianRollSteerTilt => currentDurianTurnBank;
 
     private float cameraPitch = 0f;
     private float currentRollTilt = 0f;
     private float currentSlideCameraDip = 0f;
+    private float durianRollAngleDeg = 0f;
+    private float durianRollBlend = 0f;
+    private float currentDurianRollDip = 0f;
+    private float currentDurianTurnBank = 0f;
+    private float currentDurianVisualBounceY = 0f;
+    private bool wasDurianRollingLastFrame = false;
+    private float lastFrameMouseTurnRate = 0f;
     private GridManager cachedGridManager;
 
     private void Start()
@@ -105,6 +124,7 @@ public class PlayerController : MonoBehaviour
         isDurianRolling = false;
         isBunnySliding = false;
         isFeralLunging = false;
+        ResetDurianRollState();
         parrySpeedBonusMultiplier = 1.0f;
         parrySpeedBonusTimer = 0f;
 
@@ -112,6 +132,7 @@ public class PlayerController : MonoBehaviour
         MeshRenderer mr = GetComponent<MeshRenderer>();
         if (mr != null)
         {
+            mr.enabled = true;
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
         }
 
@@ -134,6 +155,7 @@ public class PlayerController : MonoBehaviour
         isDurianRolling = false;
         isBunnySliding = false;
         isFeralLunging = false;
+        ResetDurianRollState();
         immobilizedTimer = 0f;
         parrySpeedBonusMultiplier = 1.0f;
         parrySpeedBonusTimer = 0f;
@@ -163,6 +185,35 @@ public class PlayerController : MonoBehaviour
         isDurianRolling = false;
         isBunnySliding = false;
         isFeralLunging = false;
+        ResetDurianRollState();
+    }
+
+    /// <summary>
+    /// Cancels active knockback/airborne escape momentum (e.g., Moonflower Outburst) and movement abilities
+    /// like Durian Roll without freezing normal WASD movement.
+    /// </summary>
+    public void CancelMobilityMomentum()
+    {
+        externalKnockbackVelocity = Vector3.zero;
+        if (playerVelocity.y > 0f)
+        {
+            playerVelocity.y = 0f;
+        }
+        isDurianRolling = false;
+        isBunnySliding = false;
+        isFeralLunging = false;
+        ResetDurianRollState();
+    }
+
+    private void ResetDurianRollState()
+    {
+        durianRollAngleDeg = 0f;
+        durianRollBlend = 0f;
+        currentDurianRollDip = 0f;
+        currentDurianTurnBank = 0f;
+        currentDurianVisualBounceY = 0f;
+        wasDurianRollingLastFrame = false;
+        lastFrameMouseTurnRate = 0f;
     }
 
     public void ApplyParrySpeedBoost(float bonusMultiplier, float duration = 3.0f)
@@ -303,6 +354,11 @@ public class PlayerController : MonoBehaviour
 
             transform.Rotate(Vector3.up * mouseX);
             cameraPitch = Mathf.Clamp(cameraPitch - mouseY, -80f, 80f);
+            lastFrameMouseTurnRate = (Time.deltaTime > 0.0001f) ? (mouseX / Time.deltaTime) : 0f;
+        }
+        else
+        {
+            lastFrameMouseTurnRate = 0f;
         }
 
         // Get keyboard inputs (WASD / Arrows)
@@ -325,8 +381,12 @@ public class PlayerController : MonoBehaviour
         }
         else if (isDurianRolling)
         {
-            // While rolling, propel forward with reduced lateral steering
-            float steerX = moveX * 0.35f;
+            // While rolling, A/D turns the whole Durian smoothly as well as giving subtle lateral steering
+            if (Mathf.Abs(moveX) > 0.01f)
+            {
+                transform.Rotate(Vector3.up * (moveX * durianRollSteerYawSpeed * Time.deltaTime));
+            }
+            float steerX = moveX * 0.22f;
             moveDir = (transform.forward + transform.right * steerX).normalized;
         }
         else if (isBunnySliding)
@@ -388,6 +448,45 @@ public class PlayerController : MonoBehaviour
         Vector3 finalMove = (moveDir * currentSpeed) + new Vector3(externalKnockbackVelocity.x, playerVelocity.y, externalKnockbackVelocity.z);
         controller.Move(finalMove * Time.deltaTime);
 
+        // Advance Durian Roll phase & blend so visual spin and first-person POV bob stay phase-locked
+        if (isDurianRolling && !wasDurianRollingLastFrame)
+        {
+            durianRollAngleDeg = 0f;
+        }
+        wasDurianRollingLastFrame = isDurianRolling;
+
+        durianRollBlend = Mathf.MoveTowards(durianRollBlend, isDurianRolling ? 1f : 0f, Time.deltaTime * (isDurianRolling ? 10f : 8f));
+        if (isDurianRolling)
+        {
+            float horizSpeed = new Vector2(controller.velocity.x, controller.velocity.z).magnitude;
+            float expectedRollSpeed = Mathf.Max(0.1f, playerSpeed * characterSpeedMultiplier * durianRollSpeedMultiplier);
+            float speedScale = Mathf.Clamp(horizSpeed / expectedRollSpeed, 0.45f, 1.25f);
+            durianRollAngleDeg = Mathf.Repeat(durianRollAngleDeg + durianRollSpinSpeed * speedScale * Time.deltaTime, 360f);
+        }
+        else if (durianRollBlend <= 0.001f)
+        {
+            durianRollAngleDeg = 0f;
+        }
+
+        float rollRad = durianRollAngleDeg * Mathf.Deg2Rad;
+        float halfBounce = Mathf.Abs(Mathf.Sin(rollRad)); // 0 at ground strike, 1 at crest
+        float spikeRipple = Mathf.Sin(rollRad * 6f) * 0.014f;
+        float rollBobY = ((halfBounce - 0.45f) * (durianRollBobVerticalAmp * 2f)) + spikeRipple;
+        float rollBobX = Mathf.Sin(rollRad) * durianRollBobLateralAmp;
+        float rollBobZ = Mathf.Cos(rollRad * 2f) * durianRollBobForwardAmp;
+        float rollPitchBob = 3.0f + Mathf.Sin(rollRad * 2f) * durianRollPitchBobAmp;
+        float rollWobbleZ = Mathf.Cos(rollRad) * durianRollWobbleTiltAmp;
+
+        currentDurianVisualBounceY = isDurianRolling ? (halfBounce * 0.10f) : 0f;
+
+        float targetDurianDip = isDurianRolling ? durianRollBaseDip : 0f;
+        currentDurianRollDip = Mathf.Lerp(currentDurianRollDip, targetDurianDip, Time.deltaTime * 12.0f);
+
+        float targetTurnBank = isDurianRolling
+            ? Mathf.Clamp((-lastFrameMouseTurnRate * 0.09f) - (moveX * 7.5f), -durianRollTurnBankMax, durianRollTurnBankMax)
+            : 0f;
+        currentDurianTurnBank = Mathf.Lerp(currentDurianTurnBank, targetTurnBank, Time.deltaTime * 10.0f);
+
         // Update First-Person Camera Position, FOV & Tilt
         if (isFirstPersonArenaActive && playerCamera != null)
         {
@@ -403,16 +502,21 @@ public class PlayerController : MonoBehaviour
 
             // Slightly tilt the camera left and right based on horizontal movement (or slide lean)
             float slideTilt = isBunnySliding ? -7.5f : 0f;
-            float targetTiltZ = (-moveX * strafeTiltAngle) + slideTilt;
+            float targetTiltZ = isDurianRolling ? slideTilt : ((-moveX * strafeTiltAngle) + slideTilt);
             currentRollTilt = Mathf.Lerp(currentRollTilt, targetTiltZ, Time.deltaTime * strafeTiltSpeed);
 
             float targetSlideDip = isBunnySliding ? -0.46f : (isFeralLunging ? -0.18f : 0f);
             currentSlideCameraDip = Mathf.Lerp(currentSlideCameraDip, targetSlideDip, Time.deltaTime * 14.0f);
 
-            float rollDip = isDurianRolling ? -0.25f : 0f;
             float lungePitchOffset = isFeralLunging ? 7.5f : 0f;
-            playerCamera.transform.position = transform.position + new Vector3(0f, eyeHeight + landingCameraDip + rollDip + currentSlideCameraDip, 0f);
-            playerCamera.transform.rotation = Quaternion.Euler(cameraPitch + lungePitchOffset, transform.eulerAngles.y, currentRollTilt);
+            Vector3 rollBobOffset = (transform.up * rollBobY + transform.right * rollBobX + transform.forward * rollBobZ) * durianRollBlend;
+            playerCamera.transform.position = transform.position
+                + new Vector3(0f, eyeHeight + landingCameraDip + currentDurianRollDip + currentSlideCameraDip, 0f)
+                + rollBobOffset;
+            playerCamera.transform.rotation = Quaternion.Euler(
+                cameraPitch + lungePitchOffset + (rollPitchBob * durianRollBlend),
+                transform.eulerAngles.y,
+                currentRollTilt + ((rollWobbleZ + currentDurianTurnBank) * durianRollBlend));
         }
     }
 }

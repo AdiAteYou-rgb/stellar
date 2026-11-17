@@ -77,10 +77,13 @@ public class GridManager : MonoBehaviour
     public int bunnyCost = 75;
     public float bunnyCooldown = 7.5f; // Bunny Speed Zombie [6]
 
+    public int hazmatCost = 100;
+    public float hazmatCooldown = 9.0f; // Hazmat Spitter Zombie [7]
+
     public float passiveBrainInterval = 10.0f;
     public int passiveBrainAmount = 25;
     private float zombieCooldownTimer = 0f;
-    private readonly float[] zombieCooldownTimers = new float[3];
+    private readonly float[] zombieCooldownTimers = new float[4];
     private float passiveBrainTimer = 0f;
 
     [Header("Zombie Placement Restriction")]
@@ -124,6 +127,7 @@ public class GridManager : MonoBehaviour
     public event Action<Vector3, float, int, int> OnArenaPoseLocal;            // position, yaw, stateFlags, clashId
     public event Action<bool, int, int, int> OnArenaResolvedLocal;             // zombieWon, row, col, clashId
     public event Action<float> OnArenaStunLocal;                               // duration in seconds (Durian immobilize)
+    public event Action<float> OnArenaDisruptLocal;                            // duration in seconds (Hazmat ability/mobility lock)
     public event Action<string, Vector3, Vector3> OnArenaAbilityFxLocal;       // fxType, startPos, endPos
     public event Action<int> OnArenaSeedLocal;                                 // synced random seed for 3D arena layout
     public event Action<int, float> OnArenaAttackHitLocal;                     // damage, stunDuration
@@ -140,11 +144,15 @@ public class GridManager : MonoBehaviour
     private CapsuleCollider remoteBodyHitbox;
     private SphereCollider remoteHeadHitbox;
     private Transform remoteZombieVisualRoot;
+    private Transform remotePlantVisualRoot;
     private GameObject remoteParryShieldObj;
     private bool remoteIsBunnySliding = false;
     private bool remoteIsBucketParrying = false;
     private bool remoteHasParrySpeedBuff = false;
     private bool remoteIsFeralLunging = false;
+    private bool remoteIsDurianRolling = false;
+    private float remoteDurianRollAngle = 0f;
+    private Mesh cachedDurian3DMesh;
 
     private GameObject arenaObstaclesRoot;
     private Renderer arenaFloorRenderer;
@@ -175,6 +183,8 @@ public class GridManager : MonoBehaviour
     private string arenaLastHitLabel = "HIT!";
     private float remoteHitFlashTimer = 0f;
     private float remoteImmobilizedTimer = 0f;
+    private float localAbilityLockTimer = 0f;
+    private float remoteAbilityLockedTimer = 0f;
 
     // Ability cooldown & active timers (Primary & Secondary abilities)
     private float arenaAbilityCooldownTimer = 0f; // Primary attack cooldown
@@ -197,6 +207,7 @@ public class GridManager : MonoBehaviour
     private float durianRollTimer = 0f;
     public float durianRollDuration = 2.6f;
     private GameObject localDurianRollVisual;
+    private GameObject localDurianShadowVisual;
 
     // Buckethead Parry Ability (1.0s active parry window, 5.0s cooldown, 3.0s speed boost proportional to damage)
     public float bucketParryDuration = 1.0f;
@@ -221,6 +232,12 @@ public class GridManager : MonoBehaviour
     private bool feralLungeHitDealt = false;
     private GameObject localFeralLungeVisual;
 
+    // Hazmat Spitter Ability & POV Sprayer
+    public float hazmatSludgeCooldown = 5.0f;
+    public float hazmatDisruptDuration = 2.0f;
+    private float hazmatGunRecoilTimer = 0f;
+    private GameObject localHazmatPovVisual;
+
     // Solo sparring bot timer (only active when testing solo without a second networked player)
     private float soloBotActionTimer = 2.2f;
     private float soloBotStrafePhase = 0f;
@@ -236,7 +253,7 @@ public class GridManager : MonoBehaviour
     private Renderer[,] tileRenderers;
     private GameObject tilesContainer;
     private readonly GameObject[] previewGhosts = new GameObject[3];
-    private readonly GameObject[] zombiePreviewGhosts = new GameObject[3];
+    private readonly GameObject[] zombiePreviewGhosts = new GameObject[4];
     private GameObject zombiePreviewGhost;
 
     private int hoveredRow = -1;
@@ -260,7 +277,7 @@ public class GridManager : MonoBehaviour
     private bool music2DPaused = false;
     private float music2DSavedTime = 0f;
 
-    // Top-left UI layout rects (Moon Bank + 3 Plant Buttons + Brain Bank + 3 Zombie Buttons)
+    // Top-left UI layout rects (Moon Bank + 3 Plant Buttons + Brain Bank + 4 Zombie Buttons)
     private readonly Rect moonBankRect = new Rect(12f, 12f, 106f, 66f);
     private readonly Rect[] plantButtonRects = new Rect[3]
     {
@@ -269,13 +286,23 @@ public class GridManager : MonoBehaviour
         new Rect(378f, 12f, 124f, 66f)
     };
     private readonly Rect brainBankRect = new Rect(12f, 82f, 106f, 66f);
-    private readonly Rect[] zombieButtonRects = new Rect[3]
+    private readonly Rect[] zombieButtonRects = new Rect[4]
     {
-        new Rect(122f, 82f, 124f, 66f),
-        new Rect(250f, 82f, 128f, 66f),
-        new Rect(382f, 82f, 124f, 66f)
+        new Rect(122f, 82f, 118f, 66f),
+        new Rect(244f, 82f, 118f, 66f),
+        new Rect(366f, 82f, 118f, 66f),
+        new Rect(488f, 82f, 118f, 66f)
     };
-    private readonly Rect zombieButtonRect = new Rect(122f, 82f, 124f, 66f);
+    private readonly Rect zombieButtonRect = new Rect(122f, 82f, 118f, 66f);
+
+    private Rect GetZombieButtonRect(int index)
+    {
+        if (canPlacePlants)
+        {
+            return new Rect(122f + index * 122f, 82f, 118f, 66f);
+        }
+        return new Rect(126f + index * 124f, 12f, 120f, 66f);
+    }
 
     public float TileWidth => columns > 0 ? wallWidth / columns : 2.0f;
     public float TileHeight => rows > 0 ? wallHeight / rows : 1.8f;
@@ -504,7 +531,7 @@ public class GridManager : MonoBehaviour
             previewGhosts[i].SetActive(false);
         }
 
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < zombiePreviewGhosts.Length; i++)
         {
             if (zombiePreviewGhosts[i] != null)
             {
@@ -690,6 +717,10 @@ public class GridManager : MonoBehaviour
             {
                 TrySelectZombie(ZombieType.Bunny);
             }
+            else if (Input.GetKeyDown(KeyCode.Alpha7) || Input.GetKeyDown(KeyCode.Keypad7))
+            {
+                TrySelectZombie(ZombieType.Hazmat);
+            }
         }
 
         if (Input.GetKeyDown(KeyCode.Escape) || Input.GetMouseButtonDown(1))
@@ -701,6 +732,17 @@ public class GridManager : MonoBehaviour
         UpdateHoveredTile();
         UpdateTileHighlightsAndGhost();
         HandleMouseClick();
+    }
+
+    private void LateUpdate()
+    {
+        if (!Application.isPlaying || !isIn3DArena || !isDurianRollingLocal)
+        {
+            return;
+        }
+
+        PlayerController pc = GetPrimaryPlayerController();
+        UpdateLocalDurianRollVisualTransform(pc);
     }
 
     // ==================== CLASH TRIGGER -> PAUSE 2D -> ZOOM -> 3D 1V1 ARENA ====================
@@ -738,6 +780,65 @@ public class GridManager : MonoBehaviour
             }
         }
         return null;
+    }
+
+    public bool HasPlantAheadInRow(int row, float zombieX, float maxRange)
+    {
+        if (placedPlants == null || row < 0 || row >= rows)
+        {
+            return false;
+        }
+
+        for (int c = 0; c < columns; c++)
+        {
+            PlaceholderPlant plant = placedPlants[row, c];
+            if (plant != null)
+            {
+                float dx = zombieX - plant.transform.position.x;
+                if (dx > 0.25f && dx <= maxRange)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public PlaceholderPlant GetPlantHitByProjectile(int row, float projectileX, float hitRadius = 0.45f)
+    {
+        if (placedPlants == null || row < 0 || row >= rows)
+        {
+            return null;
+        }
+
+        for (int c = columns - 1; c >= 0; c--)
+        {
+            PlaceholderPlant plant = placedPlants[row, c];
+            if (plant != null && Mathf.Abs(projectileX - plant.transform.position.x) <= hitRadius)
+            {
+                return plant;
+            }
+        }
+        return null;
+    }
+
+    public void DamagePlantOnTile(PlaceholderPlant plant, int damage)
+    {
+        if (plant == null) return;
+
+        plant.currentHealth -= damage;
+        plant.GetComponent<PlantBobber>()?.TriggerWobble(10f);
+
+        if (plant.currentHealth <= 0)
+        {
+            int r = plant.row;
+            int c = plant.column;
+            if (placedPlants != null && r >= 0 && r < rows && c >= 0 && c < columns && placedPlants[r, c] == plant)
+            {
+                placedPlants[r, c] = null;
+            }
+            Destroy(plant.gameObject);
+        }
     }
 
     private int clashingPlantRow = -1;
@@ -1052,19 +1153,25 @@ public class GridManager : MonoBehaviour
         clashingPlantType = activePlant;
         clashingZombieType = activeZombie;
 
-        // Initialize 3D Arena HP based on specific PlantType & ZombieType (Buckethead = 400 HP, Bunny = 90 HP, Normal = 150 HP)
+        // Initialize 3D Arena HP based on specific PlantType & ZombieType (carrying over 2D acid damage on Plants)
         localArenaMaxHP = isZombie ? GetZombieMaxArenaHP(activeZombie) : GetPlantMaxArenaHP(activePlant);
-        localArenaCurrentHP = localArenaMaxHP;
+        localArenaCurrentHP = isZombie ? localArenaMaxHP : GetPlantStartingArenaHP(activePlant, localArenaMaxHP, clashingPlant);
         remoteArenaMaxHP = isZombie ? GetPlantMaxArenaHP(activePlant) : GetZombieMaxArenaHP(activeZombie);
-        remoteArenaCurrentHP = remoteArenaMaxHP;
+        remoteArenaCurrentHP = isZombie ? GetPlantStartingArenaHP(activePlant, remoteArenaMaxHP, clashingPlant) : remoteArenaMaxHP;
 
         arenaHitsLanded = 0;
         arenaHitIndicatorTimer = 0f;
         remoteHitFlashTimer = 0f;
         remoteImmobilizedTimer = 0f;
+        localAbilityLockTimer = 0f;
+        remoteAbilityLockedTimer = 0f;
         arenaAbilityCooldownTimer = 0f;
         arenaSecondaryCooldownTimer = 0f;
-        arenaSecondaryMaxCooldown = (!isZombie && activePlant == PlantType.Moonflower) ? moonflowerBurstCooldown : 5.0f;
+        arenaSecondaryMaxCooldown = (!isZombie && activePlant == PlantType.Moonflower)
+            ? moonflowerBurstCooldown
+            : ((isZombie && activeZombie == ZombieType.Hazmat) ? hazmatSludgeCooldown : 5.0f);
+        hazmatGunRecoilTimer = 0f;
+        localHazmatPovVisual = null;
         isChargingRoseThorn = false;
         roseThornChargeTimer = 0f;
         isDurianRollingLocal = false;
@@ -1080,11 +1187,20 @@ public class GridManager : MonoBehaviour
         remoteIsBucketParrying = false;
         remoteHasParrySpeedBuff = false;
         remoteIsFeralLunging = false;
+        remoteIsDurianRolling = false;
+        remoteDurianRollAngle = 0f;
         soloBotKnockbackVelocity = Vector3.zero;
         soloBotActionTimer = 2.2f;
 
+        if (localDurianShadowVisual != null)
+        {
+            Destroy(localDurianShadowVisual);
+            localDurianShadowVisual = null;
+        }
+
         // Ensure 3D Arena environment exists with the remote opponent avatar (Plant or Zombie)
         BuildOrShow3DArenaEnvironment();
+        UpdateRemoteWorldHPBarScale();
 
         Vector3 arenaSpawnPos = isZombie ? ArenaZombieSpawn : ArenaPlantSpawn;
         Quaternion arenaSpawnRot = Quaternion.Euler(0f, isZombie ? 180f : 0f, 0f);
@@ -1096,6 +1212,11 @@ public class GridManager : MonoBehaviour
             chosenPlayer.characterSpeedMultiplier = GetArenaCharacterSpeedMultiplier(isZombie, activePlant, activeZombie);
             chosenPlayer.characterBaseFovBonus = GetArenaCharacterFovBonus(isZombie, activeZombie);
             chosenPlayer.EnterFirstPersonArena(targetCamera, arenaSpawnPos, arenaSpawnRot, currentArenaOpponentName);
+
+            if (!isZombie && activePlant == PlantType.Durian)
+            {
+                SetupLocalDurianShadowVisual(chosenPlayer);
+            }
         }
     }
 
@@ -1104,12 +1225,23 @@ public class GridManager : MonoBehaviour
         return (type == PlantType.Durian) ? 400 : 125;
     }
 
+    private int GetPlantStartingArenaHP(PlantType type, int maxArenaHP, PlaceholderPlant plant)
+    {
+        if (plant != null && plant.maxHealth > 0 && plant.currentHealth < plant.maxHealth)
+        {
+            float ratio = Mathf.Clamp01((float)plant.currentHealth / plant.maxHealth);
+            return Mathf.Clamp(Mathf.Max(Mathf.RoundToInt(maxArenaHP * 0.25f), Mathf.RoundToInt(maxArenaHP * ratio)), 1, maxArenaHP);
+        }
+        return maxArenaHP;
+    }
+
     private int GetZombieMaxArenaHP(ZombieType type)
     {
         switch (type)
         {
             case ZombieType.Buckethead: return 400; // Buckethead has 400 combat HP
             case ZombieType.Bunny:      return 90;  // Bunny speed zombie has lower combat HP
+            case ZombieType.Hazmat:     return 135; // Ranged biohazard specialist
             case ZombieType.Normal:
             default:                    return 150;
         }
@@ -1123,6 +1255,7 @@ public class GridManager : MonoBehaviour
             {
                 case ZombieType.Buckethead: return 0.86f; // A tiny bit slower
                 case ZombieType.Bunny:      return 1.44f; // Noticeably faster base movement speed
+                case ZombieType.Hazmat:     return 1.12f; // Agile ranged kiter speed
                 case ZombieType.Normal:
                 default:                    return 1.15f; // Faster zombie base speed for chasing plants
             }
@@ -1140,6 +1273,7 @@ public class GridManager : MonoBehaviour
         {
             case ZombieType.Bunny:      return 14f; // Higher FOV (89°) to give the illusion of lunging for the Plant player
             case ZombieType.Normal:     return 9f;  // Higher FOV (84°) for aggressive zombie chase feel
+            case ZombieType.Hazmat:     return 6f;
             case ZombieType.Buckethead: return 4f;
             default:                    return 8f;
         }
@@ -1274,6 +1408,7 @@ public class GridManager : MonoBehaviour
             if (isBucketParryingLocal) stateFlags |= 2;
             if (pc.parrySpeedBonusTimer > 0f) stateFlags |= 4;
             if (isFeralLungingLocal) stateFlags |= 8;
+            if (isDurianRollingLocal) stateFlags |= 16;
             OnArenaPoseLocal?.Invoke(pc.transform.position, pc.transform.eulerAngles.y, stateFlags, currentClashId);
         }
 
@@ -1364,6 +1499,24 @@ public class GridManager : MonoBehaviour
                 remoteParryShieldObj.transform.localScale = new Vector3(1.35f * s, 1.85f * s, 0.35f);
             }
         }
+
+        // 3. Update Remote Plant (Durian) Rolling Spin & Hop!
+        if (remotePlantVisualRoot != null)
+        {
+            if (remoteIsDurianRolling)
+            {
+                remoteDurianRollAngle = Mathf.Repeat(remoteDurianRollAngle + Time.deltaTime * 540f, 360f);
+                float bounce = Mathf.Abs(Mathf.Sin(remoteDurianRollAngle * Mathf.Deg2Rad)) * 0.16f;
+                remotePlantVisualRoot.localPosition = new Vector3(0f, -0.15f + bounce, 0f);
+                remotePlantVisualRoot.localRotation = Quaternion.Euler(remoteDurianRollAngle, 0f, 0f);
+            }
+            else
+            {
+                remoteDurianRollAngle = 0f;
+                remotePlantVisualRoot.localPosition = Vector3.Lerp(remotePlantVisualRoot.localPosition, Vector3.zero, Time.deltaTime * 14f);
+                remotePlantVisualRoot.localRotation = Quaternion.Slerp(remotePlantVisualRoot.localRotation, Quaternion.identity, Time.deltaTime * 14f);
+            }
+        }
     }
 
     public void SetRemoteArenaPose(Vector3 pos, float yaw, int stateFlags = 0, int clashId = 0)
@@ -1406,6 +1559,7 @@ public class GridManager : MonoBehaviour
         remoteIsBucketParrying = (stateFlags & 2) != 0;
         remoteHasParrySpeedBuff = (stateFlags & 4) != 0;
         remoteIsFeralLunging = (stateFlags & 8) != 0;
+        remoteIsDurianRolling = (stateFlags & 16) != 0;
 
         if (!hasRemoteArenaPose && remoteArenaAvatar != null)
         {
@@ -1429,6 +1583,34 @@ public class GridManager : MonoBehaviour
             pc.Immobilize(duration);
             CancelAllActiveArenaAbilities(pc);
         }
+    }
+
+    public void ApplyLocalArenaDisrupt(float duration)
+    {
+        if (!isIn3DArena || arenaResolving) return;
+
+        localAbilityLockTimer = Mathf.Max(localAbilityLockTimer, duration);
+
+        bool wasDurianRolling = isDurianRollingLocal;
+        bool wasCharging = isChargingRoseThorn;
+
+        PlayerController pc = GetPrimaryPlayerController();
+        if (pc != null)
+        {
+            pc.CancelMobilityMomentum();
+            CancelAllActiveArenaAbilities(pc);
+        }
+
+        if (wasDurianRolling)
+        {
+            arenaSecondaryCooldownTimer = 6.0f;
+            arenaSecondaryMaxCooldown = 6.0f;
+        }
+
+        arenaHitIndicatorTimer = 1.25f;
+        arenaLastHitLabel = (wasDurianRolling || wasCharging)
+            ? $"☣️ ABILITY CANCELED! LOCKED ({duration:F1}s) ☣️"
+            : $"☣️ DISRUPTED! ABILITIES LOCKED ({duration:F1}s) ☣️";
     }
 
     public void ApplyRemoteArenaDamage(int damage, float stunDuration)
@@ -1514,14 +1696,7 @@ public class GridManager : MonoBehaviour
         isChargingRoseThorn = false;
         roseThornChargeTimer = 0f;
 
-        isDurianRollingLocal = false;
-        durianRollTimer = 0f;
-        if (pc != null) pc.isDurianRolling = false;
-        if (localDurianRollVisual != null)
-        {
-            Destroy(localDurianRollVisual);
-            localDurianRollVisual = null;
-        }
+        StopDurianRoll(pc);
 
         isBucketParryingLocal = false;
         bucketParryTimer = 0f;
@@ -1574,6 +1749,14 @@ public class GridManager : MonoBehaviour
         {
             remoteImmobilizedTimer = Mathf.Max(0f, remoteImmobilizedTimer - Time.deltaTime);
         }
+        if (localAbilityLockTimer > 0f)
+        {
+            localAbilityLockTimer = Mathf.Max(0f, localAbilityLockTimer - Time.deltaTime);
+        }
+        if (remoteAbilityLockedTimer > 0f)
+        {
+            remoteAbilityLockedTimer = Mathf.Max(0f, remoteAbilityLockedTimer - Time.deltaTime);
+        }
 
         if (remoteHitFlashTimer > 0f)
         {
@@ -1605,6 +1788,29 @@ public class GridManager : MonoBehaviour
         if (!hasRemoteArenaPose && remoteArenaAvatar != null)
         {
             UpdateSoloArenaSparringBot(pc, isZombie, activePlant, activeZombie);
+        }
+
+        // First-person POV Acid Sprayer visual for Hazmat Zombie
+        if (hazmatGunRecoilTimer > 0f)
+        {
+            hazmatGunRecoilTimer = Mathf.Max(0f, hazmatGunRecoilTimer - Time.deltaTime);
+        }
+        if (isZombie && activeZombie == ZombieType.Hazmat && targetCamera != null)
+        {
+            if (localHazmatPovVisual == null && arena3DRoot != null)
+            {
+                localHazmatPovVisual = CreateLocalHazmatGunPovVisual();
+            }
+            if (localHazmatPovVisual != null)
+            {
+                float recoilBack = Mathf.Clamp01(hazmatGunRecoilTimer / 0.28f) * 0.14f;
+                float bobY = Mathf.Sin(Time.time * 4.5f) * 0.01f;
+                localHazmatPovVisual.transform.position = targetCamera.transform.position
+                    + targetCamera.transform.forward * (0.60f - recoilBack)
+                    + targetCamera.transform.right * 0.34f
+                    - targetCamera.transform.up * (0.26f + bobY);
+                localHazmatPovVisual.transform.rotation = targetCamera.transform.rotation * Quaternion.Euler(-recoilBack * 45f, -4f, 0f);
+            }
         }
 
         // If immobilized by Durian roll, cancel active charges and block all attacks & abilities!
@@ -1727,22 +1933,8 @@ public class GridManager : MonoBehaviour
             durianRollTimer -= Time.deltaTime;
             pc.isDurianRolling = true;
 
-            if (localDurianRollVisual == null && arena3DRoot != null)
-            {
-                localDurianRollVisual = Create3DPlantPlaceholder(PlantType.Durian, "DurianRollVisual");
-                localDurianRollVisual.transform.SetParent(arena3DRoot.transform, true);
-                foreach (Collider c in localDurianRollVisual.GetComponentsInChildren<Collider>())
-                {
-                    Destroy(c);
-                }
-            }
-
-            if (localDurianRollVisual != null)
-            {
-                localDurianRollVisual.transform.position = pc.transform.position + new Vector3(0f, -0.35f, 0f) + pc.transform.forward * 0.55f;
-                localDurianRollVisual.transform.rotation = Quaternion.Euler(Time.time * 720f, pc.transform.eulerAngles.y, 0f);
-                localDurianRollVisual.transform.localScale = Vector3.one * 0.65f;
-            }
+            EnsureLocalDurianRollVisualCreated();
+            UpdateLocalDurianRollVisualTransform(pc);
 
             // Check if Durian connects with the Zombie opponent!
             if (remoteArenaAvatar != null)
@@ -1782,6 +1974,11 @@ public class GridManager : MonoBehaviour
         }
 
         // ==================== INPUT TRIGGERS FOR PRIMARY & SECONDARY ABILITIES ====================
+        if (localAbilityLockTimer > 0f)
+        {
+            return;
+        }
+
         bool leftClick = Input.GetMouseButtonDown(0) && Cursor.lockState == CursorLockMode.Locked;
         bool rightClick = Input.GetMouseButtonDown(1) && Cursor.lockState == CursorLockMode.Locked;
         bool keyE = Input.GetKeyDown(KeyCode.E);
@@ -1843,6 +2040,20 @@ public class GridManager : MonoBehaviour
                     }
                 }
             }
+            else if (activeZombie == ZombieType.Hazmat)
+            {
+                // Hazmat Spitter Zombie:
+                // - Right Click / E / Q: Bio-Disruptor (0 DMG, cancels charge/roll/mobility + 2s ability lock + self kite hop, 5.0s CD)
+                // - Left Click: Corrosive Acid Shot (20 + 4% target Max HP dmg, 0.75s CD)
+                if ((rightClick || keyE || keyQ) && arenaSecondaryCooldownTimer <= 0f)
+                {
+                    FireHazmatSludgeBlast(pc);
+                }
+                else if (leftClick && arenaAbilityCooldownTimer <= 0f)
+                {
+                    FireHazmatAcidShot(pc);
+                }
+            }
             else
             {
                 // Normal Zombie:
@@ -1894,10 +2105,7 @@ public class GridManager : MonoBehaviour
                 // Left Click: Close-Range Spike Bash (28 Dmg, 1.0s Cooldown)
                 if ((rightClick || keyE) && arenaSecondaryCooldownTimer <= 0f)
                 {
-                    isDurianRollingLocal = true;
-                    durianRollTimer = durianRollDuration;
-                    pc.isDurianRolling = true;
-                    OnArenaAbilityFxLocal?.Invoke("ROLL", pc.transform.position, pc.transform.forward);
+                    StartDurianRoll(pc);
                 }
                 else if (leftClick && arenaAbilityCooldownTimer <= 0f)
                 {
@@ -2072,6 +2280,92 @@ public class GridManager : MonoBehaviour
         return root;
     }
 
+    private GameObject CreateLocalHazmatGunPovVisual()
+    {
+        GameObject root = new GameObject("LocalHazmatAcidGunPOV");
+        root.transform.SetParent(arena3DRoot.transform, true);
+
+        Material yellowMat = CreateColoredMaterial(new Color(0.95f, 0.78f, 0.12f));
+        Material darkMetalMat = CreateColoredMaterial(new Color(0.18f, 0.21f, 0.24f));
+        Material acidMat = CreateColoredMaterial(new Color(0.30f, 1.0f, 0.22f));
+        Material acidCoreMat = CreateColoredMaterial(new Color(0.75f, 1.0f, 0.45f));
+
+        GameObject receiver = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        receiver.transform.SetParent(root.transform, false);
+        receiver.transform.localScale = new Vector3(0.12f, 0.14f, 0.46f);
+        DestroyCollider(receiver);
+        receiver.GetComponent<Renderer>().sharedMaterial = darkMetalMat;
+
+        GameObject shroud = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        shroud.transform.SetParent(root.transform, false);
+        shroud.transform.localPosition = new Vector3(0f, 0.04f, -0.04f);
+        shroud.transform.localScale = new Vector3(0.14f, 0.09f, 0.28f);
+        DestroyCollider(shroud);
+        shroud.GetComponent<Renderer>().sharedMaterial = yellowMat;
+
+        GameObject canister = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        canister.transform.SetParent(root.transform, false);
+        canister.transform.localPosition = new Vector3(0f, 0.11f, -0.04f);
+        canister.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+        canister.transform.localScale = new Vector3(0.09f, 0.14f, 0.09f);
+        DestroyCollider(canister);
+        canister.GetComponent<Renderer>().sharedMaterial = acidMat;
+
+        GameObject barrel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        barrel.transform.SetParent(root.transform, false);
+        barrel.transform.localPosition = new Vector3(0f, 0.01f, 0.30f);
+        barrel.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+        barrel.transform.localScale = new Vector3(0.07f, 0.18f, 0.07f);
+        DestroyCollider(barrel);
+        barrel.GetComponent<Renderer>().sharedMaterial = darkMetalMat;
+
+        GameObject muzzle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        muzzle.transform.SetParent(root.transform, false);
+        muzzle.transform.localPosition = new Vector3(0f, 0.01f, 0.47f);
+        muzzle.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+        muzzle.transform.localScale = new Vector3(0.095f, 0.03f, 0.095f);
+        DestroyCollider(muzzle);
+        muzzle.GetComponent<Renderer>().sharedMaterial = acidCoreMat;
+
+        GameObject glove = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        glove.transform.SetParent(root.transform, false);
+        glove.transform.localPosition = new Vector3(0f, -0.09f, -0.06f);
+        glove.transform.localScale = new Vector3(0.12f, 0.12f, 0.14f);
+        DestroyCollider(glove);
+        glove.GetComponent<Renderer>().sharedMaterial = darkMetalMat;
+
+        return root;
+    }
+
+    private bool TryRaycastArenaBeam(Vector3 start, Vector3 target, out Vector3 beamEnd)
+    {
+        Physics.SyncTransforms();
+        Vector3 dir = target - start;
+        float dist = dir.magnitude;
+        bool blockedByObstacle = false;
+        beamEnd = target;
+
+        if (dist > 0.1f)
+        {
+            RaycastHit[] hits = Physics.RaycastAll(start, dir.normalized, dist);
+            float closestWall = dist;
+            for (int i = 0; i < hits.Length; i++)
+            {
+                Collider c = hits[i].collider;
+                if (c == null) continue;
+                if (IsOpponentHitbox(c)) continue;
+                if (c.GetComponent<PlayerController>() != null) continue;
+                if (hits[i].distance < closestWall)
+                {
+                    closestWall = hits[i].distance;
+                    beamEnd = hits[i].point;
+                    blockedByObstacle = true;
+                }
+            }
+        }
+        return !blockedByObstacle;
+    }
+
     private void UpdateSoloArenaSparringBot(PlayerController pc, bool localIsZombie, PlantType activePlant, ZombieType activeZombie)
     {
         // Integrate any active knockback arc (e.g. Moonflower Outburst) on the solo bot avatar
@@ -2112,6 +2406,8 @@ public class GridManager : MonoBehaviour
             remoteArenaAvatar.transform.rotation = Quaternion.Slerp(remoteArenaAvatar.transform.rotation, lookRot, Time.deltaTime * 8f);
         }
 
+        if (remoteAbilityLockedTimer > 0f) return;
+
         soloBotActionTimer -= Time.deltaTime;
         if (soloBotActionTimer <= 0f)
         {
@@ -2146,34 +2442,10 @@ public class GridManager : MonoBehaviour
                 Vector3 target = pc.transform.position + new Vector3(0f, isBunnySlidingLocal ? 0.45f : 0.1f, 0f);
                 Color beamCol = (activePlant == PlantType.Moonflower) ? new Color(0.25f, 0.95f, 1.0f) : new Color(1.0f, 0.20f, 0.40f);
 
-                // Check if an arena obstacle blocks the AI's laser!
-                Physics.SyncTransforms();
-                Vector3 dir = target - start;
-                float dist = dir.magnitude;
-                bool blockedByObstacle = false;
-                Vector3 beamEnd = target;
-                if (dist > 0.1f)
-                {
-                    RaycastHit[] hits = Physics.RaycastAll(start, dir.normalized, dist);
-                    float closestWall = dist;
-                    for (int i = 0; i < hits.Length; i++)
-                    {
-                        Collider c = hits[i].collider;
-                        if (c == null) continue;
-                        if (IsOpponentHitbox(c)) continue;
-                        if (c.GetComponent<PlayerController>() != null) continue;
-                        if (hits[i].distance < closestWall)
-                        {
-                            closestWall = hits[i].distance;
-                            beamEnd = hits[i].point;
-                            blockedByObstacle = true;
-                        }
-                    }
-                }
-
+                bool hasLos = TryRaycastArenaBeam(start, target, out Vector3 beamEnd);
                 Spawn3DBeamEffect(start, beamEnd, beamCol, 0.16f, 0.30f);
 
-                if (blockedByObstacle)
+                if (!hasLos)
                 {
                     // Laser stopped by cover obstacle!
                 }
@@ -2189,7 +2461,7 @@ public class GridManager : MonoBehaviour
             }
             else
             {
-                // Remote AI is a Zombie (if Buckethead, periodically raises Parry shield; if Bunny, periodically slides!)
+                // Remote AI is a Zombie
                 if (activeZombie == ZombieType.Buckethead)
                 {
                     remoteIsBucketParrying = !remoteIsBucketParrying;
@@ -2200,11 +2472,174 @@ public class GridManager : MonoBehaviour
                     remoteIsBunnySliding = !remoteIsBunnySliding;
                     soloBotActionTimer = remoteIsBunnySliding ? 0.9f : 2.5f;
                 }
+                else if (activeZombie == ZombieType.Hazmat)
+                {
+                    soloBotActionTimer = 2.1f;
+                    Vector3 start = remoteArenaAvatar.transform.position + new Vector3(0f, 0.55f, 0f);
+                    Vector3 target = pc.transform.position + new Vector3(0f, 0.20f, 0f);
+                    bool hasLos = TryRaycastArenaBeam(start, target, out Vector3 beamEnd);
+                    bool shouldDisrupt = isDurianRollingLocal || isChargingRoseThorn;
+                    if (shouldDisrupt)
+                    {
+                        Spawn3DBeamEffect(start, beamEnd, new Color(0.45f, 1.0f, 0.25f), 0.22f, 0.28f);
+                        Spawn3DAcidExplosionEffect(beamEnd);
+                        if (hasLos)
+                        {
+                            ApplyLocalArenaDisrupt(hazmatDisruptDuration);
+                        }
+                    }
+                    else
+                    {
+                        Spawn3DBeamEffect(start, beamEnd, new Color(0.30f, 1.0f, 0.22f), 0.14f, 0.26f);
+                        if (hasLos)
+                        {
+                            int dmg = 20 + Mathf.RoundToInt(localArenaMaxHP * 0.04f);
+                            ApplyRemoteArenaDamage(dmg, 0f);
+                        }
+                    }
+                }
                 else
                 {
                     soloBotActionTimer = 2.5f;
                 }
             }
+        }
+    }
+
+    private void FireHazmatAcidShot(PlayerController pc)
+    {
+        arenaAbilityCooldownTimer = 0.75f;
+        arenaPrimaryMaxCooldown = 0.75f;
+        hazmatGunRecoilTimer = 0.16f;
+        if (targetCamera == null) targetCamera = Camera.main;
+        if (targetCamera == null) return;
+
+        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        Vector3 start = pc.transform.position + new Vector3(0f, 0.50f, 0f) + targetCamera.transform.forward * 0.55f + targetCamera.transform.right * 0.22f;
+
+        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.36f, 65f, out Vector3 hitPoint);
+        Spawn3DBeamEffect(start, hitPoint, new Color(0.30f, 1.0f, 0.22f), 0.13f, 0.24f);
+        OnArenaAbilityFxLocal?.Invoke("ACID_SHOT", start, hitPoint);
+
+        if (hitOpponent)
+        {
+            int dmg = 20 + Mathf.RoundToInt(remoteArenaMaxHP * 0.04f);
+            DealDamageToOpponent(dmg, $"CORROSIVE ACID HIT ({dmg} DMG)!", 0f);
+        }
+    }
+
+    private void FireHazmatSludgeBlast(PlayerController pc)
+    {
+        arenaSecondaryCooldownTimer = hazmatSludgeCooldown;
+        arenaSecondaryMaxCooldown = hazmatSludgeCooldown;
+        hazmatGunRecoilTimer = 0.28f;
+        if (targetCamera == null) targetCamera = Camera.main;
+        if (targetCamera == null) return;
+
+        Vector3 aimForward = targetCamera.transform.forward;
+        Vector3 flatForward = new Vector3(aimForward.x, 0f, aimForward.z);
+        if (flatForward.sqrMagnitude < 0.001f) flatForward = pc.transform.forward;
+        flatForward.Normalize();
+        pc.ApplyKnockback(-flatForward * 6.5f, 4.0f, suppressLandingSlow: true);
+
+        Ray aimRay = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        Vector3 start = pc.transform.position + new Vector3(0f, 0.50f, 0f) + targetCamera.transform.forward * 0.55f + targetCamera.transform.right * 0.22f;
+
+        bool hitOpponent = CheckCursorRayHitOpponent(aimRay, 0.65f, 55f, out Vector3 hitPoint);
+        Spawn3DBeamEffect(start, hitPoint, new Color(0.45f, 1.0f, 0.25f), 0.24f, 0.30f);
+        Spawn3DAcidExplosionEffect(hitPoint);
+        OnArenaAbilityFxLocal?.Invoke("ACID_BURST", start, hitPoint);
+
+        if (hitOpponent)
+        {
+            soloBotKnockbackVelocity = Vector3.zero;
+            remoteAbilityLockedTimer = hazmatDisruptDuration;
+            OnArenaDisruptLocal?.Invoke(hazmatDisruptDuration);
+
+            arenaHitsLanded++;
+            arenaHitIndicatorTimer = 1.25f;
+            arenaLastHitLabel = $"☣️ DISRUPTED! CHARGE / ROLL / MOBILITY CANCELED ({hazmatDisruptDuration:F1}s) ☣️";
+            remoteHitFlashTimer = 0.20f;
+        }
+    }
+
+    private void StartDurianRoll(PlayerController pc)
+    {
+        isDurianRollingLocal = true;
+        durianRollTimer = durianRollDuration;
+        if (pc != null) pc.isDurianRolling = true;
+        if (localDurianShadowVisual != null)
+        {
+            localDurianShadowVisual.SetActive(false);
+        }
+        EnsureLocalDurianRollVisualCreated();
+        UpdateLocalDurianRollVisualTransform(pc);
+        if (pc != null)
+        {
+            OnArenaAbilityFxLocal?.Invoke("ROLL", pc.transform.position, pc.transform.forward);
+        }
+    }
+
+    private void EnsureLocalDurianRollVisualCreated()
+    {
+        if (localDurianRollVisual != null || arena3DRoot == null) return;
+        localDurianRollVisual = Create3DPlantPlaceholder(PlantType.Durian, "DurianRollVisual");
+        localDurianRollVisual.transform.SetParent(arena3DRoot.transform, true);
+        foreach (Collider c in localDurianRollVisual.GetComponentsInChildren<Collider>())
+        {
+            Destroy(c);
+        }
+    }
+
+    private void UpdateLocalDurianRollVisualTransform(PlayerController pc)
+    {
+        if (localDurianRollVisual == null || pc == null) return;
+
+        localDurianRollVisual.transform.position = pc.transform.position
+            + new Vector3(0f, -0.50f + pc.DurianRollVisualBounceY, 0f)
+            + pc.transform.forward * 1.02f;
+        localDurianRollVisual.transform.rotation = Quaternion.Euler(0f, pc.transform.eulerAngles.y, pc.DurianRollSteerTilt);
+        localDurianRollVisual.transform.localScale = Vector3.one * 0.74f;
+
+        Transform spinPivot = localDurianRollVisual.transform.Find("DurianModel");
+        if (spinPivot == null && localDurianRollVisual.transform.childCount > 0)
+        {
+            spinPivot = localDurianRollVisual.transform.GetChild(0);
+        }
+        if (spinPivot != null)
+        {
+            spinPivot.localRotation = Quaternion.Euler(pc.DurianRollAngleDeg, 0f, 0f);
+        }
+    }
+
+    private void SetupLocalDurianShadowVisual(PlayerController pc)
+    {
+        if (pc == null) return;
+        MeshRenderer capsuleMr = pc.GetComponent<MeshRenderer>();
+        if (capsuleMr != null)
+        {
+            capsuleMr.enabled = false;
+        }
+
+        if (localDurianShadowVisual != null)
+        {
+            Destroy(localDurianShadowVisual);
+            localDurianShadowVisual = null;
+        }
+
+        localDurianShadowVisual = Create3DPlantPlaceholder(PlantType.Durian, "LocalDurianShadow");
+        localDurianShadowVisual.transform.SetParent(pc.transform, false);
+        localDurianShadowVisual.transform.localPosition = new Vector3(0f, -0.20f, 0f);
+        localDurianShadowVisual.transform.localRotation = Quaternion.identity;
+        localDurianShadowVisual.transform.localScale = Vector3.one * 0.90f;
+
+        foreach (Collider c in localDurianShadowVisual.GetComponentsInChildren<Collider>(true))
+        {
+            Destroy(c);
+        }
+        foreach (Renderer r in localDurianShadowVisual.GetComponentsInChildren<Renderer>(true))
+        {
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
         }
     }
 
@@ -2217,6 +2652,10 @@ public class GridManager : MonoBehaviour
         {
             Destroy(localDurianRollVisual);
             localDurianRollVisual = null;
+        }
+        if (localDurianShadowVisual != null)
+        {
+            localDurianShadowVisual.SetActive(true);
         }
     }
 
@@ -2586,6 +3025,15 @@ public class GridManager : MonoBehaviour
         {
             Spawn3DMoonExplosionEffect(startPos);
         }
+        else if (fxType == "ACID_SHOT")
+        {
+            Spawn3DBeamEffect(startPos, endPos, new Color(0.30f, 1.0f, 0.22f), 0.13f, 0.24f);
+        }
+        else if (fxType == "ACID_BURST")
+        {
+            Spawn3DBeamEffect(startPos, endPos, new Color(0.45f, 1.0f, 0.25f), 0.24f, 0.30f);
+            Spawn3DAcidExplosionEffect(endPos);
+        }
     }
 
     private sealed class ExpandingBurstFx : MonoBehaviour
@@ -2612,32 +3060,51 @@ public class GridManager : MonoBehaviour
 
     private void Spawn3DMoonExplosionEffect(Vector3 center)
     {
+        SpawnExpandingBurstExplosion(
+            "MoonflowerOutburstFX",
+            center,
+            new Color(1.0f, 0.94f, 0.48f),
+            new Color(0.32f, 0.95f, 1.0f),
+            new Color(0.65f, 0.42f, 1.0f),
+            endScale: 3.8f);
+    }
+
+    private void Spawn3DAcidExplosionEffect(Vector3 center)
+    {
+        SpawnExpandingBurstExplosion(
+            "HazmatAcidBurstFX",
+            center,
+            new Color(0.76f, 1.0f, 0.42f),
+            new Color(0.30f, 1.0f, 0.22f),
+            new Color(0.14f, 0.65f, 0.12f),
+            endScale: 3.2f);
+    }
+
+    private void SpawnExpandingBurstExplosion(string fxName, Vector3 center, Color coreColor, Color ringColor, Color shardAltColor, float endScale)
+    {
         if (arena3DRoot == null) return;
 
-        GameObject root = new GameObject("MoonflowerOutburstFX");
+        GameObject root = new GameObject(fxName);
         root.transform.SetParent(arena3DRoot.transform, true);
         root.transform.position = center;
 
-        Material coreMat = CreateColoredMaterial(new Color(1.0f, 0.94f, 0.48f));
-        Material moonCyanMat = CreateColoredMaterial(new Color(0.32f, 0.95f, 1.0f));
-        Material shockVioletMat = CreateColoredMaterial(new Color(0.65f, 0.42f, 1.0f));
+        Material coreMat = CreateColoredMaterial(coreColor);
+        Material ringMat = CreateColoredMaterial(ringColor);
+        Material altMat = CreateColoredMaterial(shardAltColor);
 
-        // Inner bright solar-lunar core flash
         GameObject core = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         core.transform.SetParent(root.transform, false);
         core.transform.localScale = new Vector3(0.45f, 0.45f, 0.45f);
         DestroyCollider(core);
         core.GetComponent<Renderer>().sharedMaterial = coreMat;
 
-        // Ground-hugging shockwave disc
         GameObject ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         ring.transform.SetParent(root.transform, false);
         ring.transform.localPosition = new Vector3(0f, -0.35f, 0f);
         ring.transform.localScale = new Vector3(1.1f, 0.04f, 1.1f);
         DestroyCollider(ring);
-        ring.GetComponent<Renderer>().sharedMaterial = moonCyanMat;
+        ring.GetComponent<Renderer>().sharedMaterial = ringMat;
 
-        // 8 radial lunar burst shards expanding outward
         int sparkCount = 8;
         for (int i = 0; i < sparkCount; i++)
         {
@@ -2649,13 +3116,13 @@ public class GridManager : MonoBehaviour
             shard.transform.localRotation = Quaternion.LookRotation(dir);
             shard.transform.localScale = new Vector3(0.11f, 0.11f, 0.34f);
             DestroyCollider(shard);
-            shard.GetComponent<Renderer>().sharedMaterial = (i % 2 == 0) ? moonCyanMat : shockVioletMat;
+            shard.GetComponent<Renderer>().sharedMaterial = (i % 2 == 0) ? ringMat : altMat;
         }
 
         ExpandingBurstFx anim = root.AddComponent<ExpandingBurstFx>();
         anim.duration = 0.36f;
         anim.startScale = 0.45f;
-        anim.endScale = 3.8f;
+        anim.endScale = endScale;
     }
 
     private void Spawn3DBeamEffect(Vector3 start, Vector3 end, Color color, float thickness, float duration)
@@ -2772,6 +3239,20 @@ public class GridManager : MonoBehaviour
         hasRemoteArenaPose = false;
         localInitiatedCurrentClash = false;
         soloBotKnockbackVelocity = Vector3.zero;
+        localAbilityLockTimer = 0f;
+        remoteAbilityLockedTimer = 0f;
+
+        if (localHazmatPovVisual != null)
+        {
+            Destroy(localHazmatPovVisual);
+            localHazmatPovVisual = null;
+        }
+
+        if (localDurianShadowVisual != null)
+        {
+            Destroy(localDurianShadowVisual);
+            localDurianShadowVisual = null;
+        }
 
         if (arena3DRoot != null)
         {
@@ -2783,6 +3264,9 @@ public class GridManager : MonoBehaviour
             remoteBodyHitbox = null;
             remoteHeadHitbox = null;
             remoteZombieVisualRoot = null;
+            remotePlantVisualRoot = null;
+            remoteIsDurianRolling = false;
+            remoteDurianRollAngle = 0f;
             remoteParryShieldObj = null;
             remoteHpBarFill = null;
             remoteHpBarFillRenderer = null;
@@ -3003,6 +3487,11 @@ public class GridManager : MonoBehaviour
         {
             if (allSpikes[i] != null) Destroy(allSpikes[i].gameObject);
         }
+        HazmatAcidProjectile[] allAcid = FindObjectsByType<HazmatAcidProjectile>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < allAcid.Length; i++)
+        {
+            if (allAcid[i] != null) Destroy(allAcid[i].gameObject);
+        }
 
         // Reset currencies & timers
         currentMoons = 100;
@@ -3160,6 +3649,7 @@ public class GridManager : MonoBehaviour
             visual = Create3DZombiePlaceholder(touchedZombieType, $"Visual_3D_{touchedZombieType}");
             currentArenaOpponentName = $"{touchedZombieType.ToString().ToUpper()} ZOMBIE";
             remoteZombieVisualRoot = visual.transform;
+            remotePlantVisualRoot = null;
 
             visual.transform.SetParent(remoteArenaAvatar.transform, false);
             visual.transform.localPosition = Vector3.zero;
@@ -3171,6 +3661,7 @@ public class GridManager : MonoBehaviour
             visual = Create3DPlantPlaceholder(touchedType, $"Visual_3D_{touchedType}");
             currentArenaOpponentName = $"{touchedType.ToString().ToUpper()} PLAYER";
             remoteZombieVisualRoot = null;
+            remotePlantVisualRoot = visual.transform;
 
             visual.transform.SetParent(remoteArenaAvatar.transform, false);
             visual.transform.localPosition = Vector3.zero;
@@ -3606,6 +4097,7 @@ public class GridManager : MonoBehaviour
             case ZombieType.Normal: return zombieCost;
             case ZombieType.Buckethead: return bucketheadCost;
             case ZombieType.Bunny: return bunnyCost;
+            case ZombieType.Hazmat: return hazmatCost;
             default: return zombieCost;
         }
     }
@@ -3617,6 +4109,7 @@ public class GridManager : MonoBehaviour
             case ZombieType.Normal: return zombieCooldown;
             case ZombieType.Buckethead: return bucketheadCooldown;
             case ZombieType.Bunny: return bunnyCooldown;
+            case ZombieType.Hazmat: return hazmatCooldown;
             default: return zombieCooldown;
         }
     }
@@ -3810,6 +4303,20 @@ public class GridManager : MonoBehaviour
     public void SpawnRoseProjectile(Vector3 spawnPos)
     {
         SpawnRoseProjectile(0, spawnPos);
+    }
+
+    public void SpawnHazmatAcidProjectile(int row, Vector3 spawnPos, int damage = 30)
+    {
+        GameObject proj = GameVisuals.CreateAcidProjectile("HazmatAcidGlob");
+        if (tilesContainer != null)
+        {
+            proj.transform.SetParent(tilesContainer.transform, true);
+        }
+
+        proj.transform.position = spawnPos;
+
+        HazmatAcidProjectile ap = proj.AddComponent<HazmatAcidProjectile>();
+        ap.Initialize(this, row, damage, DefenseLineX);
     }
 
     private GameObject CreateMoonVisual(string name)
@@ -4058,10 +4565,7 @@ public class GridManager : MonoBehaviour
             if (actualBrainRect.Contains(guiMousePos)) return;
             for (int i = 0; i < zombieButtonRects.Length; i++)
             {
-                Rect actualZombieBtn = canPlacePlants
-                    ? zombieButtonRects[i]
-                    : new Rect(126f + i * 142f, 12f, 138f, 66f);
-                if (actualZombieBtn.Contains(guiMousePos)) return;
+                if (GetZombieButtonRect(i).Contains(guiMousePos)) return;
             }
         }
 
@@ -4204,6 +4708,7 @@ public class GridManager : MonoBehaviour
 
         bool isBuckethead = (type == ZombieType.Buckethead);
         bool isBunny = (type == ZombieType.Bunny);
+        bool isHazmat = (type == ZombieType.Hazmat);
 
         Material skinMat = CreateColoredMaterial(isBunny ? new Color(0.56f, 0.80f, 0.36f) : new Color(0.50f, 0.74f, 0.30f));
         Material darkSkinMat = CreateColoredMaterial(new Color(0.38f, 0.58f, 0.22f));
@@ -4223,6 +4728,12 @@ public class GridManager : MonoBehaviour
             coatMat = CreateColoredMaterial(new Color(0.14f, 0.74f, 0.78f)); // Sporty bright teal tracksuit
             pantsMat = CreateColoredMaterial(new Color(0.16f, 0.20f, 0.34f)); // Navy track pants
             shoeMat = CreateColoredMaterial(new Color(0.98f, 0.42f, 0.14f)); // Bright orange running sneakers
+        }
+        else if (isHazmat)
+        {
+            coatMat = CreateColoredMaterial(new Color(0.95f, 0.78f, 0.12f)); // Bright biohazard yellow suit
+            pantsMat = CreateColoredMaterial(new Color(0.82f, 0.66f, 0.10f)); // Protective suit legs
+            shoeMat = CreateColoredMaterial(new Color(0.15f, 0.17f, 0.19f)); // Dark rubber boots & gloves
         }
         else
         {
@@ -4337,6 +4848,90 @@ public class GridManager : MonoBehaviour
             DestroyCollider(bunnyTail);
             bunnyTail.GetComponent<Renderer>().sharedMaterial = whiteMat;
         }
+        else if (isHazmat)
+        {
+            Material harnessMat = CreateColoredMaterial(new Color(0.16f, 0.18f, 0.21f));
+            Material acidTankGlowMat = CreateColoredMaterial(new Color(0.25f, 1.0f, 0.20f));
+            Material pipeMat = CreateColoredMaterial(new Color(0.32f, 0.36f, 0.40f));
+
+            // Biohazard Chest Harness Straps + Belt
+            for (int side = -1; side <= 1; side += 2)
+            {
+                GameObject strap = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                strap.name = side < 0 ? "HarnessStrapL" : "HarnessStrapR";
+                strap.transform.SetParent(root.transform, false);
+                strap.transform.localPosition = new Vector3(side * 0.19f, 0.0f, 0.0f);
+                strap.transform.localScale = new Vector3(0.09f, 0.74f, 0.43f);
+                DestroyCollider(strap);
+                strap.GetComponent<Renderer>().sharedMaterial = harnessMat;
+            }
+
+            GameObject hazardBelt = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            hazardBelt.name = "HazardBelt";
+            hazardBelt.transform.SetParent(root.transform, false);
+            hazardBelt.transform.localPosition = new Vector3(0f, -0.28f, 0f);
+            hazardBelt.transform.localScale = new Vector3(0.72f, 0.10f, 0.44f);
+            DestroyCollider(hazardBelt);
+            hazardBelt.GetComponent<Renderer>().sharedMaterial = harnessMat;
+
+            // Glowing Neon-Green Biohazard Core Disc on Front Chest
+            GameObject coreRing = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            coreRing.name = "BiohazardCoreRing";
+            coreRing.transform.SetParent(root.transform, false);
+            coreRing.transform.localPosition = new Vector3(0f, 0.06f, 0.21f);
+            coreRing.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            coreRing.transform.localScale = new Vector3(0.26f, 0.03f, 0.26f);
+            DestroyCollider(coreRing);
+            coreRing.GetComponent<Renderer>().sharedMaterial = harnessMat;
+
+            GameObject bioCore = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            bioCore.name = "BiohazardCoreGlow";
+            bioCore.transform.SetParent(root.transform, false);
+            bioCore.transform.localPosition = new Vector3(0f, 0.06f, 0.22f);
+            bioCore.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            bioCore.transform.localScale = new Vector3(0.18f, 0.035f, 0.18f);
+            DestroyCollider(bioCore);
+            bioCore.GetComponent<Renderer>().sharedMaterial = acidTankGlowMat;
+
+            // Twin Back Acid Tanks (Dark Frame + Glowing Neon-Green Inner Liquid Cylinders)
+            for (int side = -1; side <= 1; side += 2)
+            {
+                float tx = side * 0.17f;
+                GameObject tankShell = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                tankShell.name = side < 0 ? "AcidTankShellL" : "AcidTankShellR";
+                tankShell.transform.SetParent(root.transform, false);
+                tankShell.transform.localPosition = new Vector3(tx, 0.04f, -0.28f);
+                tankShell.transform.localScale = new Vector3(0.24f, 0.36f, 0.24f);
+                DestroyCollider(tankShell);
+                tankShell.GetComponent<Renderer>().sharedMaterial = harnessMat;
+
+                GameObject tankLiquid = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                tankLiquid.name = side < 0 ? "AcidTankLiquidL" : "AcidTankLiquidR";
+                tankLiquid.transform.SetParent(root.transform, false);
+                tankLiquid.transform.localPosition = new Vector3(tx, 0.04f, -0.30f);
+                tankLiquid.transform.localScale = new Vector3(0.19f, 0.28f, 0.22f);
+                DestroyCollider(tankLiquid);
+                tankLiquid.GetComponent<Renderer>().sharedMaterial = acidTankGlowMat;
+
+                GameObject tankCap = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                tankCap.name = side < 0 ? "AcidTankCapL" : "AcidTankCapR";
+                tankCap.transform.SetParent(root.transform, false);
+                tankCap.transform.localPosition = new Vector3(tx, 0.42f, -0.28f);
+                tankCap.transform.localScale = new Vector3(0.13f, 0.05f, 0.13f);
+                DestroyCollider(tankCap);
+                tankCap.GetComponent<Renderer>().sharedMaterial = pipeMat;
+            }
+
+            // Connecting Top Pipe Manifold
+            GameObject manifold = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            manifold.name = "TankManifoldPipe";
+            manifold.transform.SetParent(root.transform, false);
+            manifold.transform.localPosition = new Vector3(0f, 0.45f, -0.28f);
+            manifold.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+            manifold.transform.localScale = new Vector3(0.08f, 0.20f, 0.08f);
+            DestroyCollider(manifold);
+            manifold.GetComponent<Renderer>().sharedMaterial = pipeMat;
+        }
         else
         {
             GameObject tie = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -4356,66 +4951,176 @@ public class GridManager : MonoBehaviour
         leftArm.transform.localRotation = Quaternion.Euler(82f, 0f, 0f);
         leftArm.transform.localScale = new Vector3(0.18f, 0.38f, 0.18f);
         DestroyCollider(leftArm);
-        leftArm.GetComponent<Renderer>().sharedMaterial = skinMat;
+        leftArm.GetComponent<Renderer>().sharedMaterial = isHazmat ? coatMat : skinMat;
 
-        GameObject rightArm = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        rightArm.name = "RightArm";
-        rightArm.transform.SetParent(root.transform, false);
-        rightArm.transform.localPosition = new Vector3(0.42f, 0.14f, 0.38f);
-        rightArm.transform.localRotation = Quaternion.Euler(85f, 0f, 0f);
-        rightArm.transform.localScale = new Vector3(0.18f, 0.38f, 0.18f);
-        DestroyCollider(rightArm);
-        rightArm.GetComponent<Renderer>().sharedMaterial = skinMat;
+        if (isHazmat)
+        {
+            GameObject leftGlove = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            leftGlove.name = "LeftHazmatGlove";
+            leftGlove.transform.SetParent(root.transform, false);
+            leftGlove.transform.localPosition = new Vector3(-0.42f, 0.20f, 0.72f);
+            leftGlove.transform.localScale = new Vector3(0.20f, 0.18f, 0.22f);
+            DestroyCollider(leftGlove);
+            leftGlove.GetComponent<Renderer>().sharedMaterial = shoeMat;
 
-        // 3D Zombie Head & Jaw
+            // Unscaled RightArm pivot so the attached Acid Sprayer Barrel animates cleanly without scale distortion
+            GameObject rightArmPivot = new GameObject("RightArm");
+            rightArmPivot.transform.SetParent(root.transform, false);
+            rightArmPivot.transform.localPosition = new Vector3(0.42f, 0.14f, 0.38f);
+            rightArmPivot.transform.localRotation = Quaternion.Euler(85f, 0f, 0f);
+
+            GameObject rightSleeve = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            rightSleeve.name = "RightArmSleeve";
+            rightSleeve.transform.SetParent(rightArmPivot.transform, false);
+            rightSleeve.transform.localScale = new Vector3(0.18f, 0.38f, 0.18f);
+            DestroyCollider(rightSleeve);
+            rightSleeve.GetComponent<Renderer>().sharedMaterial = coatMat;
+
+            GameObject rightGlove = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            rightGlove.name = "RightHazmatGlove";
+            rightGlove.transform.SetParent(rightArmPivot.transform, false);
+            rightGlove.transform.localPosition = new Vector3(0f, 0.36f, 0f);
+            rightGlove.transform.localScale = new Vector3(0.20f, 0.20f, 0.20f);
+            DestroyCollider(rightGlove);
+            rightGlove.GetComponent<Renderer>().sharedMaterial = shoeMat;
+
+            Material sprayerMat = CreateColoredMaterial(new Color(0.20f, 0.23f, 0.27f));
+            Material acidTipMat = CreateColoredMaterial(new Color(0.30f, 1.0f, 0.22f));
+
+            GameObject sprayerBarrel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            sprayerBarrel.name = "AcidSprayerBarrel";
+            sprayerBarrel.transform.SetParent(rightArmPivot.transform, false);
+            sprayerBarrel.transform.localPosition = new Vector3(0f, 0.56f, -0.02f);
+            sprayerBarrel.transform.localScale = new Vector3(0.14f, 0.26f, 0.14f);
+            DestroyCollider(sprayerBarrel);
+            sprayerBarrel.GetComponent<Renderer>().sharedMaterial = sprayerMat;
+
+            GameObject sprayerVial = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            sprayerVial.name = "AcidSprayerVial";
+            sprayerVial.transform.SetParent(rightArmPivot.transform, false);
+            sprayerVial.transform.localPosition = new Vector3(0f, 0.50f, -0.12f);
+            sprayerVial.transform.localScale = new Vector3(0.10f, 0.13f, 0.10f);
+            DestroyCollider(sprayerVial);
+            sprayerVial.GetComponent<Renderer>().sharedMaterial = acidTipMat;
+
+            GameObject nozzleTip = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            nozzleTip.name = "AcidSprayerNozzle";
+            nozzleTip.transform.SetParent(rightArmPivot.transform, false);
+            nozzleTip.transform.localPosition = new Vector3(0f, 0.83f, -0.02f);
+            nozzleTip.transform.localScale = new Vector3(0.18f, 0.12f, 0.18f);
+            DestroyCollider(nozzleTip);
+            nozzleTip.GetComponent<Renderer>().sharedMaterial = acidTipMat;
+        }
+        else
+        {
+            GameObject rightArm = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            rightArm.name = "RightArm";
+            rightArm.transform.SetParent(root.transform, false);
+            rightArm.transform.localPosition = new Vector3(0.42f, 0.14f, 0.38f);
+            rightArm.transform.localRotation = Quaternion.Euler(85f, 0f, 0f);
+            rightArm.transform.localScale = new Vector3(0.18f, 0.38f, 0.18f);
+            DestroyCollider(rightArm);
+            rightArm.GetComponent<Renderer>().sharedMaterial = skinMat;
+        }
+
+        // 3D Zombie Head & Jaw (or Domed Yellow Hazmat Hood + Gas Mask for Hazmat)
         GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         head.name = "Head";
         head.transform.SetParent(root.transform, false);
         head.transform.localPosition = new Vector3(0f, 0.62f, 0.04f);
-        head.transform.localScale = new Vector3(0.66f, 0.68f, 0.64f);
+        head.transform.localScale = isHazmat ? new Vector3(0.76f, 0.76f, 0.74f) : new Vector3(0.66f, 0.68f, 0.64f);
         DestroyCollider(head);
-        head.GetComponent<Renderer>().sharedMaterial = skinMat;
+        head.GetComponent<Renderer>().sharedMaterial = isHazmat ? coatMat : skinMat;
 
-        GameObject jaw = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        jaw.name = "Jaw";
-        jaw.transform.SetParent(root.transform, false);
-        jaw.transform.localPosition = new Vector3(0f, 0.42f, 0.14f);
-        jaw.transform.localScale = new Vector3(0.44f, 0.18f, 0.38f);
-        DestroyCollider(jaw);
-        jaw.GetComponent<Renderer>().sharedMaterial = darkSkinMat;
+        if (isHazmat)
+        {
+            Material maskDarkMat = CreateColoredMaterial(new Color(0.16f, 0.18f, 0.21f));
+            Material filterTrimMat = CreateColoredMaterial(new Color(0.32f, 0.36f, 0.40f));
+            Material visorGlowMat = CreateColoredMaterial(new Color(0.28f, 1.0f, 0.22f));
 
-        // Mismatched Cartoon Zombie Eyes on front (+Z)
-        GameObject leftEye = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        leftEye.name = "LeftEye";
-        leftEye.transform.SetParent(root.transform, false);
-        leftEye.transform.localPosition = new Vector3(-0.14f, 0.66f, 0.31f);
-        leftEye.transform.localScale = new Vector3(0.18f, 0.18f, 0.10f);
-        DestroyCollider(leftEye);
-        leftEye.GetComponent<Renderer>().sharedMaterial = eyeWhiteMat;
+            // Glowing Green Visor Shield across the front of the hood
+            GameObject visor = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            visor.name = "HazmatVisor";
+            visor.transform.SetParent(root.transform, false);
+            visor.transform.localPosition = new Vector3(0f, 0.68f, 0.26f);
+            visor.transform.localScale = new Vector3(0.56f, 0.28f, 0.32f);
+            DestroyCollider(visor);
+            visor.GetComponent<Renderer>().sharedMaterial = visorGlowMat;
 
-        GameObject leftPupil = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        leftPupil.name = "LeftPupil";
-        leftPupil.transform.SetParent(root.transform, false);
-        leftPupil.transform.localPosition = new Vector3(-0.14f, 0.66f, 0.35f);
-        leftPupil.transform.localScale = new Vector3(0.08f, 0.08f, 0.06f);
-        DestroyCollider(leftPupil);
-        leftPupil.GetComponent<Renderer>().sharedMaterial = pupilMat;
+            // Dark Charcoal Respirator Snout
+            GameObject snout = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            snout.name = "RespiratorSnout";
+            snout.transform.SetParent(root.transform, false);
+            snout.transform.localPosition = new Vector3(0f, 0.45f, 0.38f);
+            snout.transform.localRotation = Quaternion.Euler(105f, 0f, 0f);
+            snout.transform.localScale = new Vector3(0.22f, 0.16f, 0.22f);
+            DestroyCollider(snout);
+            snout.GetComponent<Renderer>().sharedMaterial = maskDarkMat;
 
-        GameObject rightEye = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        rightEye.name = "RightEye";
-        rightEye.transform.SetParent(root.transform, false);
-        rightEye.transform.localPosition = new Vector3(0.14f, 0.65f, 0.31f);
-        rightEye.transform.localScale = new Vector3(0.13f, 0.13f, 0.09f);
-        DestroyCollider(rightEye);
-        rightEye.GetComponent<Renderer>().sharedMaterial = eyeWhiteMat;
+            // Twin Angled Side Filter Canisters (FilterL, FilterR)
+            for (int side = -1; side <= 1; side += 2)
+            {
+                GameObject filter = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                filter.name = side < 0 ? "FilterL" : "FilterR";
+                filter.transform.SetParent(root.transform, false);
+                filter.transform.localPosition = new Vector3(side * 0.24f, 0.42f, 0.33f);
+                filter.transform.localRotation = Quaternion.Euler(85f, side * 32f, 0f);
+                filter.transform.localScale = new Vector3(0.18f, 0.09f, 0.18f);
+                DestroyCollider(filter);
+                filter.GetComponent<Renderer>().sharedMaterial = filterTrimMat;
 
-        GameObject rightPupil = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        rightPupil.name = "RightPupil";
-        rightPupil.transform.SetParent(root.transform, false);
-        rightPupil.transform.localPosition = new Vector3(0.14f, 0.65f, 0.34f);
-        rightPupil.transform.localScale = new Vector3(0.06f, 0.06f, 0.05f);
-        DestroyCollider(rightPupil);
-        rightPupil.GetComponent<Renderer>().sharedMaterial = pupilMat;
+                GameObject filterCap = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                filterCap.name = side < 0 ? "FilterCapL" : "FilterCapR";
+                filterCap.transform.SetParent(filter.transform, false);
+                filterCap.transform.localPosition = new Vector3(0f, 0.85f, 0f);
+                filterCap.transform.localScale = new Vector3(0.55f, 0.35f, 0.55f);
+                DestroyCollider(filterCap);
+                filterCap.GetComponent<Renderer>().sharedMaterial = visorGlowMat;
+            }
+        }
+        else
+        {
+            GameObject jaw = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            jaw.name = "Jaw";
+            jaw.transform.SetParent(root.transform, false);
+            jaw.transform.localPosition = new Vector3(0f, 0.42f, 0.14f);
+            jaw.transform.localScale = new Vector3(0.44f, 0.18f, 0.38f);
+            DestroyCollider(jaw);
+            jaw.GetComponent<Renderer>().sharedMaterial = darkSkinMat;
+
+            // Mismatched Cartoon Zombie Eyes on front (+Z)
+            GameObject leftEye = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            leftEye.name = "LeftEye";
+            leftEye.transform.SetParent(root.transform, false);
+            leftEye.transform.localPosition = new Vector3(-0.14f, 0.66f, 0.31f);
+            leftEye.transform.localScale = new Vector3(0.18f, 0.18f, 0.10f);
+            DestroyCollider(leftEye);
+            leftEye.GetComponent<Renderer>().sharedMaterial = eyeWhiteMat;
+
+            GameObject leftPupil = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            leftPupil.name = "LeftPupil";
+            leftPupil.transform.SetParent(root.transform, false);
+            leftPupil.transform.localPosition = new Vector3(-0.14f, 0.66f, 0.35f);
+            leftPupil.transform.localScale = new Vector3(0.08f, 0.08f, 0.06f);
+            DestroyCollider(leftPupil);
+            leftPupil.GetComponent<Renderer>().sharedMaterial = pupilMat;
+
+            GameObject rightEye = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            rightEye.name = "RightEye";
+            rightEye.transform.SetParent(root.transform, false);
+            rightEye.transform.localPosition = new Vector3(0.14f, 0.65f, 0.31f);
+            rightEye.transform.localScale = new Vector3(0.13f, 0.13f, 0.09f);
+            DestroyCollider(rightEye);
+            rightEye.GetComponent<Renderer>().sharedMaterial = eyeWhiteMat;
+
+            GameObject rightPupil = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            rightPupil.name = "RightPupil";
+            rightPupil.transform.SetParent(root.transform, false);
+            rightPupil.transform.localPosition = new Vector3(0.14f, 0.65f, 0.34f);
+            rightPupil.transform.localScale = new Vector3(0.06f, 0.06f, 0.05f);
+            DestroyCollider(rightPupil);
+            rightPupil.GetComponent<Renderer>().sharedMaterial = pupilMat;
+        }
 
         // Headgear & Special 3D Visuals per Zombie Type
         if (isBuckethead)
@@ -4574,25 +5279,68 @@ public class GridManager : MonoBehaviour
         }
         else
         {
-            GameObject body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            body.name = "Body";
-            body.transform.SetParent(root.transform, false);
-            body.transform.localPosition = new Vector3(0f, -0.05f, 0f);
-            body.transform.localScale = new Vector3(1.25f, 1.40f, 1.20f);
-            DestroyCollider(body);
-            body.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.68f, 0.58f, 0.2f));
+            GameObject modelObj = new GameObject("DurianModel");
+            modelObj.transform.SetParent(root.transform, false);
+            modelObj.transform.localPosition = Vector3.zero;
+            modelObj.transform.localRotation = Quaternion.identity;
+            modelObj.transform.localScale = Vector3.one;
 
-            GameObject spikes1 = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            spikes1.name = "Spikes";
-            spikes1.transform.SetParent(root.transform, false);
-            spikes1.transform.localPosition = new Vector3(0f, -0.05f, 0f);
-            spikes1.transform.localRotation = Quaternion.Euler(45f, 0f, 45f);
-            spikes1.transform.localScale = new Vector3(1.05f, 1.05f, 1.05f);
-            DestroyCollider(spikes1);
-            spikes1.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.82f, 0.72f, 0.25f));
+            Mesh durianMesh = GetDurian3DMesh();
+            if (durianMesh != null)
+            {
+                MeshFilter mf = modelObj.AddComponent<MeshFilter>();
+                mf.sharedMesh = durianMesh;
+
+                MeshRenderer mr = modelObj.AddComponent<MeshRenderer>();
+                mr.sharedMaterial = CreateColoredMaterial(new Color(0.74f, 0.67f, 0.22f));
+            }
+            else
+            {
+                GameObject body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                body.name = "Body";
+                body.transform.SetParent(modelObj.transform, false);
+                body.transform.localPosition = new Vector3(0f, -0.05f, 0f);
+                body.transform.localScale = new Vector3(1.25f, 1.40f, 1.20f);
+                DestroyCollider(body);
+                body.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.68f, 0.58f, 0.2f));
+
+                GameObject spikes1 = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                spikes1.name = "Spikes";
+                spikes1.transform.SetParent(modelObj.transform, false);
+                spikes1.transform.localPosition = new Vector3(0f, -0.05f, 0f);
+                spikes1.transform.localRotation = Quaternion.Euler(45f, 0f, 45f);
+                spikes1.transform.localScale = new Vector3(1.05f, 1.05f, 1.05f);
+                DestroyCollider(spikes1);
+                spikes1.GetComponent<Renderer>().sharedMaterial = CreateColoredMaterial(new Color(0.82f, 0.72f, 0.25f));
+            }
         }
 
         return root;
+    }
+
+    private Mesh GetDurian3DMesh()
+    {
+        if (cachedDurian3DMesh != null) return cachedDurian3DMesh;
+
+        GameObject modelPrefab = Resources.Load<GameObject>("Models/Durian");
+        if (modelPrefab != null)
+        {
+            MeshFilter mf = modelPrefab.GetComponentInChildren<MeshFilter>(true);
+            if (mf != null && mf.sharedMesh != null)
+            {
+                cachedDurian3DMesh = mf.sharedMesh;
+                return cachedDurian3DMesh;
+            }
+        }
+
+        Mesh directMesh = Resources.Load<Mesh>("Models/Durian");
+        if (directMesh != null)
+        {
+            cachedDurian3DMesh = directMesh;
+            return cachedDurian3DMesh;
+        }
+
+        return null;
     }
 
     private void DestroyCollider(GameObject obj)
@@ -4845,7 +5593,7 @@ public class GridManager : MonoBehaviour
         // Dynamically position the Defense Timer so it NEVER overlaps the seed buttons on the left or the Role banner on the right
         float minTimerX = canPlacePlants
             ? (plantButtonRects[2].x + plantButtonRects[2].width + 16f)
-            : (canPlaceZombies ? (126f + 3f * 142f + 12f) : 285f);
+            : (canPlaceZombies ? (126f + 4f * 124f + 12f) : 285f);
         float maxTimerX = sw - 245f - 210f; // 10px buffer before the compact 220px top-right role banner
         float timerX = (maxTimerX > minTimerX) ? (minTimerX + (maxTimerX - minTimerX) * 0.5f) : minTimerX;
         Rect timerRect = new Rect(timerX, 12f, 210f, 66f);
@@ -4898,6 +5646,7 @@ public class GridManager : MonoBehaviour
             DrawZombieSeedButton(0, ZombieType.Normal, "Zombie [4]", zombieCost, new Color(0.68f, 0.42f, 0.88f));
             DrawZombieSeedButton(1, ZombieType.Buckethead, "Buckethead [5]", bucketheadCost, new Color(0.62f, 0.72f, 0.84f));
             DrawZombieSeedButton(2, ZombieType.Bunny, "Bunny Speed [6]", bunnyCost, new Color(0.22f, 0.86f, 0.84f));
+            DrawZombieSeedButton(3, ZombieType.Hazmat, "Hazmat [7]", hazmatCost, new Color(0.55f, 0.95f, 0.25f));
         }
 
         GUI.backgroundColor = prevBg;
@@ -4917,7 +5666,9 @@ public class GridManager : MonoBehaviour
 
         string zombieDisplayName = (activeZombie == ZombieType.Buckethead)
             ? "BUCKETHEAD ZOMBIE"
-            : (activeZombie == ZombieType.Bunny ? "BUNNY ZOMBIE" : "NORMAL ZOMBIE");
+            : (activeZombie == ZombieType.Bunny
+                ? "BUNNY ZOMBIE"
+                : (activeZombie == ZombieType.Hazmat ? "HAZMAT ZOMBIE" : "NORMAL ZOMBIE"));
 
         string myTitle = isZombie ? $"YOU ({zombieDisplayName})" : $"YOU ({activePlant.ToString().ToUpper()})";
         string oppTitle = isZombie ? $"OPPONENT ({activePlant.ToString().ToUpper()})" : $"OPPONENT ({zombieDisplayName})";
@@ -4943,6 +5694,12 @@ public class GridManager : MonoBehaviour
                 secondaryAbilityTitle = isBunnySlidingLocal
                     ? $"SLIDING!\n{bunnySlideTimer:F1}s"
                     : "Bunny Slide [LMB/Q]";
+            }
+            else if (activeZombie == ZombieType.Hazmat)
+            {
+                abilityHint = "[L-Click] Corrosive Acid (20+4% Max HP)  •  [R-Click / E / Q] Bio-Disruptor (0 DMG, Cancels Roll/Charge/Mobility + 2s Lock + Hop)";
+                primaryAbilityTitle = "Acid Shot [LMB]\n20+4% HP DMG";
+                secondaryAbilityTitle = "Bio-Disruptor [RMB/E]\nCancel + 2s Lock";
             }
             else
             {
@@ -5063,33 +5820,52 @@ public class GridManager : MonoBehaviour
         }
 
         // 6. Bottom-Center Ability Cooldown Boxes (Primary & Secondary Abilities)
+        bool abilitiesLocked = localAbilityLockTimer > 0f;
         DrawArenaAbilityCooldownBox(
             new Rect(cx - 178f, sh - 78f, 170f, 60f),
             primaryAbilityTitle,
             arenaAbilityCooldownTimer,
             arenaPrimaryMaxCooldown,
-            new Color(0.22f, 0.72f, 0.95f)
+            new Color(0.22f, 0.72f, 0.95f),
+            abilitiesLocked,
+            localAbilityLockTimer,
+            hazmatDisruptDuration
         );
         DrawArenaAbilityCooldownBox(
             new Rect(cx + 8f, sh - 78f, 170f, 60f),
             secondaryAbilityTitle,
             arenaSecondaryCooldownTimer,
             arenaSecondaryMaxCooldown,
-            new Color(0.88f, 0.48f, 0.98f)
+            new Color(0.88f, 0.48f, 0.98f),
+            abilitiesLocked,
+            localAbilityLockTimer,
+            hazmatDisruptDuration
         );
 
-        // 7. Immobilized Banner if Zombie Player was hit by Durian Roll
+        // 7. Immobilized / Disrupted Banners
         if (pc != null && pc.IsImmobilized)
         {
             GUI.backgroundColor = new Color(0.28f, 0.08f, 0.05f, 0.94f);
             GUI.Box(new Rect(cx - 250f, cy - 95f, 500f, 46f),
                 $"⚡ IMMOBILIZED BY DURIAN! ({pc.immobilizedTimer:F1}s) — Movement & Attacks Locked ⚡", s_StunStyle);
         }
+        else if (localAbilityLockTimer > 0f)
+        {
+            GUI.backgroundColor = new Color(0.10f, 0.24f, 0.08f, 0.94f);
+            GUI.Box(new Rect(cx - 250f, cy - 95f, 500f, 46f),
+                $"☣️ ABILITIES DISRUPTED! ({localAbilityLockTimer:F1}s) — Charges, Roll & Mobility Locked ☣️", s_StunStyle);
+        }
         else if (remoteImmobilizedTimer > 0f)
         {
             GUI.backgroundColor = new Color(0.08f, 0.24f, 0.12f, 0.90f);
             GUI.Box(new Rect(cx - 210f, cy + 64f, 420f, 30f),
                 $"ZOMBIE IMMOBILIZED & UNABLE TO ATTACK ({remoteImmobilizedTimer:F1}s)", s_OppStunStyle);
+        }
+        else if (remoteAbilityLockedTimer > 0f)
+        {
+            GUI.backgroundColor = new Color(0.08f, 0.24f, 0.12f, 0.90f);
+            GUI.Box(new Rect(cx - 210f, cy + 64f, 420f, 30f),
+                $"PLANT ABILITIES DISRUPTED ({remoteAbilityLockedTimer:F1}s)", s_OppStunStyle);
         }
 
         // 8. Arena Resolution Banner (N / M or 0 HP)
@@ -5106,21 +5882,35 @@ public class GridManager : MonoBehaviour
         GUI.backgroundColor = prevBg;
     }
 
-    private void DrawArenaAbilityCooldownBox(Rect rect, string title, float cdRemaining, float cdMax, Color readyTint)
+    private void DrawArenaAbilityCooldownBox(
+        Rect rect,
+        string title,
+        float cdRemaining,
+        float cdMax,
+        Color readyTint,
+        bool isLocked = false,
+        float lockRemaining = 0f,
+        float lockMax = 2.0f)
     {
         Color prevBg = GUI.backgroundColor;
         Color prevColor = GUI.color;
 
-        bool isReady = cdRemaining <= 0.005f;
-        GUI.backgroundColor = isReady ? readyTint : new Color(0.25f, 0.25f, 0.28f, 0.95f);
+        bool isReady = !isLocked && cdRemaining <= 0.005f;
+        GUI.backgroundColor = isLocked
+            ? new Color(0.18f, 0.32f, 0.14f, 0.95f)
+            : (isReady ? readyTint : new Color(0.25f, 0.25f, 0.28f, 0.95f));
 
-        string status = isReady ? "READY" : $"CD: {cdRemaining:F1}s";
+        string status = isLocked
+            ? $"LOCKED: {lockRemaining:F1}s"
+            : (isReady ? "READY" : $"CD: {cdRemaining:F1}s");
         GUI.Box(rect, $"{title}\n{status}", s_PlantBtnStyle);
 
-        // PvZ-style vertical recharge curtain sweep
-        if (!isReady && cdMax > 0.01f)
+        // PvZ-style vertical recharge/lock curtain sweep
+        float sweepRem = isLocked ? Mathf.Max(cdRemaining, lockRemaining) : cdRemaining;
+        float sweepMax = isLocked ? Mathf.Max(cdMax, lockMax) : cdMax;
+        if ((isLocked || !isReady) && sweepMax > 0.01f)
         {
-            float ratio = Mathf.Clamp01(cdRemaining / cdMax);
+            float ratio = Mathf.Clamp01(sweepRem / sweepMax);
             GUI.color = new Color(0.02f, 0.02f, 0.05f, 0.65f);
             GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, rect.height * ratio), Texture2D.whiteTexture);
             GUI.color = prevColor;
@@ -5218,9 +6008,7 @@ public class GridManager : MonoBehaviour
 
     private void DrawZombieSeedButton(int index, ZombieType type, string title, int cost, Color readyTint)
     {
-        Rect targetRect = canPlacePlants
-            ? zombieButtonRects[index]
-            : new Rect(126f + index * 142f, 12f, 138f, 66f);
+        Rect targetRect = GetZombieButtonRect(index);
 
         float cd = GetZombieCooldownRemaining(type);
         float maxCd = GetZombieMaxCooldown(type);

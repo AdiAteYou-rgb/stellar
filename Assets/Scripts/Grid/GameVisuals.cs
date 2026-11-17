@@ -108,6 +108,31 @@ public static class GameVisuals
         float s = targetHeight / Mathf.Max(0.01f, sprHeightUnits);
         root.transform.localScale = new Vector3(s, s, 1.0f);
 
+        if (!isGhost && type == ZombieType.Hazmat)
+        {
+            Sprite acidSpr = GetAcidProjectileSprite();
+            if (acidSpr != null)
+            {
+                GameObject tankGlow = new GameObject("AcidTankGlow");
+                tankGlow.transform.SetParent(root.transform, false);
+                tankGlow.transform.localPosition = new Vector3(0.32f, 0.88f, -0.02f);
+                tankGlow.transform.localScale = Vector3.one * 0.28f;
+                SpriteRenderer tankSr = tankGlow.AddComponent<SpriteRenderer>();
+                tankSr.sprite = acidSpr;
+                tankSr.sortingOrder = 16;
+                tankSr.color = new Color(0.55f, 1.0f, 0.35f, 0.72f);
+
+                GameObject nozzleGlow = new GameObject("NozzleGlow");
+                nozzleGlow.transform.SetParent(root.transform, false);
+                nozzleGlow.transform.localPosition = new Vector3(-0.62f, 0.92f, -0.02f);
+                nozzleGlow.transform.localScale = Vector3.one * 0.22f;
+                SpriteRenderer nozzleSr = nozzleGlow.AddComponent<SpriteRenderer>();
+                nozzleSr.sprite = acidSpr;
+                nozzleSr.sortingOrder = 16;
+                nozzleSr.color = new Color(0.65f, 1.0f, 0.35f, 0.65f);
+            }
+        }
+
         return root;
     }
 
@@ -141,6 +166,21 @@ public static class GameVisuals
         return root;
     }
 
+    public static GameObject CreateAcidProjectile(string name, float scale = 0.36f)
+    {
+        EnsureSpritesLoaded();
+        GameObject root = new GameObject(name);
+
+        SpriteRenderer sr = root.AddComponent<SpriteRenderer>();
+        Sprite spr = GetAcidProjectileSprite();
+        sr.sprite = spr;
+        sr.sortingOrder = 21;
+
+        float s = scale * 1.8f;
+        root.transform.localScale = new Vector3(s, s, 1.0f);
+        return root;
+    }
+
     // ==================== SPRITE ACCESSORS & CACHE ====================
 
     public static Sprite GetPlantSprite(PlantType type)
@@ -167,6 +207,8 @@ public static class GameVisuals
                 return cachedSprites.TryGetValue("BucketheadZombie", out var bz) ? bz : (cachedSprites.TryGetValue("Zombie", out var z1) ? z1 : null);
             case ZombieType.Bunny:
                 return cachedSprites.TryGetValue("BunnyZombie", out var rbz) ? rbz : (cachedSprites.TryGetValue("Zombie", out var z2) ? z2 : null);
+            case ZombieType.Hazmat:
+                return cachedSprites.TryGetValue("HazmatZombie", out var hz) ? hz : (cachedSprites.TryGetValue("Zombie", out var z3) ? z3 : null);
             case ZombieType.Normal:
             default:
                 return cachedSprites.TryGetValue("Zombie", out var z) ? z : null;
@@ -185,9 +227,15 @@ public static class GameVisuals
         return cachedSprites.TryGetValue("RoseProjectile", out var rp) ? rp : null;
     }
 
+    public static Sprite GetAcidProjectileSprite()
+    {
+        EnsureSpritesLoaded();
+        return cachedSprites.TryGetValue("AcidProjectile", out var ap) ? ap : null;
+    }
+
     public static void EnsureSpritesLoaded()
     {
-        if (cachedSprites.Count >= 8) return;
+        if (cachedSprites.Count >= 10) return;
 
         LoadOrGenerateSprite("Moonflower", 256, 256, new Vector2(0.5f, 0.15f), 128f, GenerateMoonflowerTexture);
         LoadOrGenerateSprite("Rose", 256, 256, new Vector2(0.5f, 0.15f), 128f, GenerateRoseTexture);
@@ -195,8 +243,10 @@ public static class GameVisuals
         LoadOrGenerateSprite("Zombie", 256, 256, new Vector2(0.5f, 0.12f), 128f, GenerateZombieTexture);
         LoadOrGenerateSprite("BucketheadZombie", 256, 256, new Vector2(0.5f, 0.12f), 128f, GenerateBucketheadZombieTexture);
         LoadOrGenerateSprite("BunnyZombie", 256, 256, new Vector2(0.5f, 0.12f), 128f, GenerateBunnyZombieTexture);
+        LoadOrGenerateSprite("HazmatZombie", 256, 256, new Vector2(0.5f, 0.12f), 128f, GenerateHazmatZombieTexture);
         LoadOrGenerateSprite("Moon", 256, 256, new Vector2(0.5f, 0.5f), 128f, GenerateMoonTexture);
         LoadOrGenerateSprite("RoseProjectile", 128, 128, new Vector2(0.5f, 0.5f), 100f, GenerateRoseProjectileTexture);
+        LoadOrGenerateSprite("AcidProjectile", 128, 128, new Vector2(0.5f, 0.5f), 100f, GenerateAcidProjectileTexture);
     }
 
     private static void LoadOrGenerateSprite(
@@ -810,6 +860,101 @@ public static class GameVisuals
         c.DrawRotatedEllipse(hx + 14f, hy + 46f, 5f, 20f, -16f, new Color32(244, 114, 182, 255));
     }
 
+    private static void GenerateHazmatZombieTexture(Canvas2D c)
+    {
+        Color32 outlineDark = new Color32(55, 42, 10, 255);
+        Color32 suitYellow = new Color32(245, 198, 28, 255);
+        Color32 suitShade = new Color32(212, 162, 16, 255);
+        Color32 suitHighlight = new Color32(255, 232, 102, 220);
+        Color32 rubberDark = new Color32(42, 48, 56, 255);
+        Color32 rubberOutline = new Color32(18, 22, 26, 255);
+        Color32 acidGreen = new Color32(76, 255, 48, 255);
+        Color32 acidBright = new Color32(188, 255, 115, 255);
+        Color32 acidDark = new Color32(24, 130, 22, 255);
+
+        // 1. Ground shadow
+        c.DrawEllipse(128, 16, 58, 10, new Color32(12, 28, 14, 110));
+
+        // 2. Heavy dark-charcoal rubber hazmat boots with neon green soles
+        c.DrawCapsule(98, 20, 116, 20, 9f, rubberDark, 2.5f, rubberOutline);
+        c.DrawCapsule(98, 15, 116, 15, 3f, acidGreen);
+        c.DrawCapsule(138, 22, 156, 22, 9f, rubberDark, 2.5f, rubberOutline);
+        c.DrawCapsule(138, 17, 156, 17, 3f, acidGreen);
+
+        // 3. Yellow biohazard suit legs with dark knee pads
+        c.DrawCapsule(108, 27, 114, 76, 11f, suitYellow, 3f, outlineDark);
+        c.DrawCapsule(146, 29, 142, 76, 11f, suitShade, 3f, outlineDark);
+        c.DrawCircle(110, 52, 8f, rubberDark, 2f, rubberOutline);
+        c.DrawCircle(144, 54, 8f, rubberDark, 2f, rubberOutline);
+
+        // 4. Pressurized glowing neon-green Acid Tank strapped to the back (+X side)
+        c.DrawGlow(169, 134, 42f, new Color32(57, 255, 20, 90));
+        c.DrawRect(152, 86, 34, 72, rubberDark, 10f, 3f, rubberOutline);
+        // Inner glowing green liquid chamber + bubbles
+        c.DrawRect(157, 94, 24, 56, acidGreen, 7f, 2f, acidDark);
+        c.DrawRect(160, 114, 18, 34, acidBright, 5f);
+        c.DrawCircle(165, 104, 3.5f, acidBright);
+        c.DrawCircle(173, 126, 4.5f, new Color32(255, 255, 255, 210));
+        c.DrawCircle(166, 142, 4f, new Color32(255, 255, 255, 220));
+        // Top tank cap & hose pipe
+        c.DrawRect(161, 156, 16, 9, new Color32(120, 135, 148, 255), 3f, 2f, rubberOutline);
+        c.DrawCapsule(168, 164, 146, 140, 4.5f, rubberDark, 1.5f, rubberOutline);
+
+        // 5. Yellow Hazmat Jacket Torso + Harness & Biohazard Core
+        c.DrawRect(95, 74, 65, 70, suitYellow, 10f, 3.5f, outlineDark);
+        c.DrawRect(100, 74, 55, 24, suitShade, 4f);
+        // Shoulder harness straps
+        c.DrawCapsule(106, 142, 112, 88, 4.5f, rubberDark, 1.5f, rubberOutline);
+        c.DrawCapsule(146, 142, 140, 88, 4.5f, rubberDark, 1.5f, rubberOutline);
+        // Hazard belt
+        c.DrawRect(94, 81, 67, 10, rubberDark, 3f, 2f, rubberOutline);
+        c.DrawRect(114, 82, 26, 8, suitYellow, 2f);
+        // Glowing neon-green biohazard chest emblem
+        c.DrawCircle(126, 115, 13f, rubberDark, 2.5f, rubberOutline);
+        c.DrawCircle(126, 115, 9f, acidGreen);
+        c.DrawCircle(126, 115, 4f, acidBright);
+
+        // 6. Back Arm & Front Arm holding the Acid Sprayer Nozzle pointing forward (-X)
+        // Back arm reaching forward
+        c.DrawCapsule(132, 116, 84, 118, 8.5f, suitShade, 3f, outlineDark);
+        c.DrawCircle(78, 118, 9f, rubberDark, 2.5f, rubberOutline);
+
+        // Acid Sprayer body & glowing green nozzle tip at (49, 148)
+        c.DrawCapsule(88, 134, 56, 146, 8.5f, rubberDark, 2.5f, rubberOutline);
+        c.DrawRect(64, 144, 16, 10, acidGreen, 3f, 2f, acidDark);
+        c.DrawGlow(49, 148, 22f, new Color32(76, 255, 48, 150));
+        c.DrawCircle(49, 148, 8f, acidGreen, 2f, acidDark);
+        c.DrawCircle(49, 148, 4f, acidBright);
+
+        // Front arm & rubber glove gripping sprayer
+        c.DrawCapsule(114, 128, 86, 134, 9.5f, suitYellow, 3f, outlineDark);
+        c.DrawCapsule(112, 132, 90, 137, 3f, suitHighlight);
+        c.DrawCircle(82, 134, 10f, rubberDark, 2.5f, rubberOutline);
+
+        // 7. Domed Yellow Hazmat Hood, Glowing Green Visor & Twin-Filter Gas Mask
+        float hx = 128f;
+        float hy = 186f;
+        c.DrawRotatedEllipse(hx, hy, 40f, 38f, 4f, suitYellow, 4f, outlineDark);
+        c.DrawRotatedEllipse(hx + 4f, hy + 10f, 28f, 22f, 8f, suitHighlight);
+
+        // Wide glowing toxic-green visor shield
+        c.DrawGlow(hx - 14f, hy + 8f, 34f, new Color32(76, 255, 48, 95));
+        c.DrawRotatedEllipse(hx - 14f, hy + 8f, 23f, 14f, -6f, acidDark, 3f, rubberOutline);
+        c.DrawRotatedEllipse(hx - 15f, hy + 8f, 19f, 10.5f, -6f, acidGreen);
+        // Subtle glowing zombie eye silhouettes behind visor + visor glare streak
+        c.DrawCircle(hx - 21f, hy + 9f, 4.5f, acidBright);
+        c.DrawCircle(hx - 7f, hy + 8f, 3.8f, acidBright);
+        c.DrawCapsule(hx - 24f, hy + 14f, hx - 10f, hy + 15f, 2.2f, new Color32(255, 255, 255, 210));
+
+        // Dark charcoal twin-filter respirator snout
+        c.DrawCapsule(hx - 18f, hy - 14f, hx - 30f, hy - 18f, 11f, rubberDark, 2.5f, rubberOutline);
+        c.DrawCircle(hx - 32f, hy - 18f, 8.5f, new Color32(74, 85, 98, 255), 2.5f, rubberOutline);
+        c.DrawCircle(hx - 32f, hy - 18f, 4f, acidGreen);
+        // Side filter canister
+        c.DrawCircle(hx - 12f, hy - 18f, 10f, new Color32(62, 72, 84, 255), 2.5f, rubberOutline);
+        c.DrawCircle(hx - 12f, hy - 18f, 4.5f, acidGreen);
+    }
+
     private static void GenerateMoonTexture(Canvas2D c)
     {
         // 1. Soft radiant celestial halo glow
@@ -862,6 +1007,33 @@ public static class GameVisuals
         // Center spine crystal facet highlight
         c.DrawCapsule(30, 64, 102, 64, 3f, new Color32(255, 128, 171, 240));
         c.DrawCircle(102, 64, 3.5f, new Color32(255, 255, 255, 255));
+    }
+
+    private static void GenerateAcidProjectileTexture(Canvas2D c)
+    {
+        Color32 rimDark = new Color32(20, 122, 22, 255);
+        Color32 acidLime = new Color32(76, 255, 48, 255);
+        Color32 acidCore = new Color32(184, 255, 96, 255);
+
+        // Radiant toxic green glow aura
+        c.DrawGlow(58, 64, 56f, new Color32(57, 255, 20, 125));
+
+        // Trailing toxic droplets behind the glob (+X tail, flying toward -X)
+        c.DrawCircle(98, 74, 5.5f, acidLime, 1.5f, rimDark);
+        c.DrawCircle(108, 60, 4.5f, acidCore, 1.2f, rimDark);
+        c.DrawCircle(90, 48, 5.0f, acidLime, 1.5f, rimDark);
+
+        // Teardrop / comet acid glob pointing left (-X)
+        c.DrawTriangle(
+            new Vector2(54, 86),
+            new Vector2(54, 42),
+            new Vector2(98, 64),
+            acidLime, 2.5f, rimDark);
+
+        // Main bulbous corrosive glob head
+        c.DrawCircle(52, 64, 23f, acidLime, 2.5f, rimDark);
+        c.DrawCircle(50, 64, 16f, acidCore);
+        c.DrawCircle(44, 71, 6.5f, new Color32(242, 255, 220, 235));
     }
 
     // ==================== ANTI-ALIASED 2D CANVAS RASTERIZER ====================
