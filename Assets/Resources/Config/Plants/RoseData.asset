@@ -1,0 +1,60 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2a1457b7992d3874682cd63982e94671, type: 3}
+  m_Name: RoseData
+  m_EditorClassIdentifier: Assembly-CSharp::PlantDefinitionSO
+  displayName: 'Rose [2]'
+  cost: 100
+  cooldown: 7.5
+  buttonReadyTint: {r: 1, g: 0.4, b: 0.5, a: 1}
+  maxHealth2D: 100
+  maxArenaHP: 125
+  arenaSpeedMultiplier: 1
+  unitSprite: {fileID: 21300000, guid: 494aed7471d0dbd46a8604e2aca28f2c, type: 3}
+  prefab2D: {fileID: 2627469211095120834, guid: 5c660cac12e2efc4eac07d0891d14f82, type: 3}
+  arenaVisualPrefab3D: {fileID: 2298469232095054450, guid: b3b6baeb9522b934aaa666cc813675eb, type: 3}
+  primaryAbilityTitle: 'Thorn Shot [LMB]
+
+    25 DMG'
+  primaryAbilityDamage: 25
+  primaryAbilityCooldown: 0.9
+  secondaryAbilityTitle: 'Thorn Volley [RMB/E]
+
+    45 DMG'
+  secondaryAbilityDamage: 45
+  secondaryAbilityCooldown: 4.5
+  arenaAbilityHint: "[L-Click] Hitscan Thorn (25 DMG)  \u2022  [R-Click / E] Heavy Thorn Volley (45 DMG)"
+  plantType: 1
+  actionInterval2D: 1.8
+  moonProduceAmount: 50
+  chargeDuration: 0.25
+  burstRadius: 4.6
+  rollDuration: 2.6
+  stunDuration: 2
+  primaryHitscanConfig:
+    abilityName: Rose Thorn
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []
+  secondaryHitscanConfig:
+    abilityName: Rose Heavy Volley
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []

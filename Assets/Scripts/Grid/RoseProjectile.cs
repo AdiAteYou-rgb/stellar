@@ -1,12 +1,17 @@
 using UnityEngine;
 
-public class RoseProjectile : MonoBehaviour
+/// <summary>
+/// Ruby thorn projectile fired rightward by Rose plants to damage zombies in the same lane.
+/// </summary>
+public class RoseProjectile : GridProjectileBase
 {
-    public GridManager gridManager;
-    public int row;
-    public float speed = 7.5f;
-    public int damage = 20;
     public float maxX = 9.0f;
+
+    private void Reset()
+    {
+        speed = 7.5f;
+        damage = 20;
+    }
 
     public void Initialize(GridManager manager, int laneRow, float wallRightLimit)
     {
@@ -20,17 +25,18 @@ public class RoseProjectile : MonoBehaviour
         maxX = wallRightLimit + 1.0f;
     }
 
-    private void Update()
+    protected override void MoveProjectile()
     {
-        if (gridManager != null && gridManager.is2DWorldPaused)
-        {
-            return;
-        }
-
         transform.position += Vector3.right * (speed * Time.deltaTime);
-        transform.Rotate(0f, 0f, 540f * Time.deltaTime, Space.Self);
+    }
 
-        // Check collision with any zombie in the same row
+    protected override void AnimateProjectile()
+    {
+        transform.Rotate(0f, 0f, 540f * Time.deltaTime, Space.Self);
+    }
+
+    protected override bool TryHitTarget()
+    {
         for (int i = WallZombie.ActiveZombies.Count - 1; i >= 0; i--)
         {
             WallZombie zombie = WallZombie.ActiveZombies[i];
@@ -39,14 +45,11 @@ public class RoseProjectile : MonoBehaviour
             if (Mathf.Abs(transform.position.x - zombie.transform.position.x) <= 0.45f)
             {
                 zombie.TakeDamage(damage);
-                Destroy(gameObject);
-                return;
+                return true;
             }
         }
-
-        if (transform.position.x > maxX)
-        {
-            Destroy(gameObject);
-        }
+        return false;
     }
+
+    protected override bool IsOutOfBounds() => transform.position.x > maxX;
 }

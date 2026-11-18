@@ -26,8 +26,8 @@ public static class WallSceneSetup
             return;
         }
 
-        GridManager existing = UnityEngine.Object.FindFirstObjectByType<GridManager>();
-        MultiplayerMenuManager menuMgr = UnityEngine.Object.FindFirstObjectByType<MultiplayerMenuManager>();
+        GridManager existing = UnityEngine.Object.FindAnyObjectByType<GridManager>();
+        MultiplayerMenuManager menuMgr = UnityEngine.Object.FindAnyObjectByType<MultiplayerMenuManager>();
 
         if (existing == null || menuMgr == null)
         {
@@ -51,7 +51,7 @@ public static class WallSceneSetup
         }
 
         // 1. Find or create the Gameplay Wall GameObject at (0, 4.5, 0)
-        GridManager grid = UnityEngine.Object.FindFirstObjectByType<GridManager>();
+        GridManager grid = UnityEngine.Object.FindAnyObjectByType<GridManager>();
         GameObject wallObj;
 
         if (grid != null)
@@ -89,7 +89,7 @@ public static class WallSceneSetup
         grid.lockCameraToThisWall = false;
 
         // 2. Find or create the MenuWall further away at (50, 4.5, 0)
-        MultiplayerMenuManager menuMgr = UnityEngine.Object.FindFirstObjectByType<MultiplayerMenuManager>();
+        MultiplayerMenuManager menuMgr = UnityEngine.Object.FindAnyObjectByType<MultiplayerMenuManager>();
         GameObject menuWallObj;
 
         if (menuMgr != null)
@@ -153,6 +153,7 @@ public static class WallSceneSetup
         menuMgr.EnsureMenuBackdrop(force: true);
         menuMgr.SnapCameraToMenuWall();
         SetGameView16By9();
+        ProjectAssetGenerator.EnsureAssetsAndSceneWired();
 
         EditorUtility.SetDirty(wallObj);
         EditorUtility.SetDirty(menuWallObj);

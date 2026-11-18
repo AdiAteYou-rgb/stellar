@@ -104,7 +104,7 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
         if (gameplayWallGrid == null)
         {
-            gameplayWallGrid = FindFirstObjectByType<GridManager>();
+            gameplayWallGrid = FindAnyObjectByType<GridManager>();
         }
 
         SyncMenuWallScale();
@@ -145,7 +145,7 @@ public class MultiplayerMenuManager : MonoBehaviour
     {
         if (gameplayWallGrid == null)
         {
-            gameplayWallGrid = FindFirstObjectByType<GridManager>();
+            gameplayWallGrid = FindAnyObjectByType<GridManager>();
         }
         if (gameplayWallGrid == null || gridEventsSubscribed)
         {
@@ -1077,7 +1077,7 @@ public class MultiplayerMenuManager : MonoBehaviour
         }
 
         // Also move Player object to the gameplay area if present
-        PlayerController player = FindFirstObjectByType<PlayerController>();
+        PlayerController player = FindAnyObjectByType<PlayerController>();
         if (player != null)
         {
             CharacterController cc = player.GetComponent<CharacterController>();
@@ -1118,7 +1118,7 @@ public class MultiplayerMenuManager : MonoBehaviour
 
         if (gameplayWallGrid == null)
         {
-            gameplayWallGrid = FindFirstObjectByType<GridManager>();
+            gameplayWallGrid = FindAnyObjectByType<GridManager>();
         }
 
         if (gameplayWallGrid != null)
@@ -1386,7 +1386,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             star.transform.localPosition = new Vector3(rx, ry, -0.15f);
             star.transform.localRotation = Quaternion.Euler(0f, 0f, 45f);
             star.transform.localScale = new Vector3(0.15f, 0.15f, 0.05f);
-            DestroyCollider(star);
+            MaterialCache.DestroyCollider(star);
             star.GetComponent<Renderer>().sharedMaterial = GameVisuals.GetColoredMaterial(new Color(1.0f, 0.95f, 0.75f), 0.9f);
         }
 
@@ -1396,7 +1396,7 @@ public class MultiplayerMenuManager : MonoBehaviour
         lawn.transform.SetParent(root.transform, false);
         lawn.transform.localPosition = new Vector3(0f, -3.8f, -0.2f);
         lawn.transform.localScale = new Vector3(16.2f, 1.4f, 0.25f);
-        DestroyCollider(lawn);
+        MaterialCache.DestroyCollider(lawn);
         lawn.GetComponent<Renderer>().sharedMaterial = GameVisuals.GetColoredMaterial(grassCol);
 
         // Picket fence slats
@@ -1407,7 +1407,7 @@ public class MultiplayerMenuManager : MonoBehaviour
             slat.transform.SetParent(root.transform, false);
             slat.transform.localPosition = new Vector3(i * 1.05f, -2.7f, -0.25f);
             slat.transform.localScale = new Vector3(0.38f, 1.7f, 0.12f);
-            DestroyCollider(slat);
+            MaterialCache.DestroyCollider(slat);
             slat.GetComponent<Renderer>().sharedMaterial = GameVisuals.GetColoredMaterial(woodCol);
         }
 
@@ -1416,14 +1416,14 @@ public class MultiplayerMenuManager : MonoBehaviour
         railTop.transform.SetParent(root.transform, false);
         railTop.transform.localPosition = new Vector3(0f, -2.2f, -0.28f);
         railTop.transform.localScale = new Vector3(16.0f, 0.22f, 0.12f);
-        DestroyCollider(railTop);
+        MaterialCache.DestroyCollider(railTop);
         railTop.GetComponent<Renderer>().sharedMaterial = GameVisuals.GetColoredMaterial(woodCol);
 
         GameObject railBot = GameObject.CreatePrimitive(PrimitiveType.Cube);
         railBot.transform.SetParent(root.transform, false);
         railBot.transform.localPosition = new Vector3(0f, -3.2f, -0.28f);
         railBot.transform.localScale = new Vector3(16.0f, 0.22f, 0.12f);
-        DestroyCollider(railBot);
+        MaterialCache.DestroyCollider(railBot);
         railBot.GetComponent<Renderer>().sharedMaterial = GameVisuals.GetColoredMaterial(woodCol);
 
         // 2D Animated Moonflower on left
@@ -1461,22 +1461,6 @@ public class MultiplayerMenuManager : MonoBehaviour
         light.range = 22f;
         light.color = new Color(1.0f, 0.95f, 0.88f);
         light.intensity = 1.6f;
-    }
-
-    private void DestroyCollider(GameObject obj)
-    {
-        Collider col = obj.GetComponent<Collider>();
-        if (col != null)
-        {
-            if (Application.isPlaying)
-            {
-                Destroy(col);
-            }
-            else
-            {
-                DestroyImmediate(col);
-            }
-        }
     }
 
     // ==================== ON-SCREEN MENU & ROLE BOXES UI ====================

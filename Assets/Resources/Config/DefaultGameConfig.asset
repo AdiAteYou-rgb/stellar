@@ -1,0 +1,52 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e6f711098b9c6a94884f4a4154d68698, type: 3}
+  m_Name: DefaultGameConfig
+  m_EditorClassIdentifier: Assembly-CSharp::GameConfigSO
+  rows: 5
+  columns: 8
+  wallWidth: 16
+  wallHeight: 9
+  wallThickness: 0.2
+  tilePadding: 0.06
+  matchDuration: 300
+  zombieAllowedColumnsFromRight: 2
+  startingMoons: 100
+  skyMoonInterval: 15
+  skyMoonValue: 50
+  moonClusterPickupRadius: 3.2
+  startingBrains: 150
+  passiveBrainInterval: 10
+  passiveBrainAmount: 25
+  clashZoomDuration: 1.35
+  clashTargetOrthoSize: 1.15
+  arenaResultPauseDuration: 2.5
+  tileColorLight: {r: 0.24, g: 0.54, b: 0.24, a: 1}
+  tileColorDark: {r: 0.18, g: 0.44, b: 0.18, a: 1}
+  tileHoverColor: {r: 0.45, g: 0.92, b: 0.45, a: 1}
+  tileZombieHoverColor: {r: 0.82, g: 0.38, b: 0.98, a: 1}
+  tileOccupiedColor: {r: 0.85, g: 0.3, b: 0.25, a: 1}
+  backgroundMusic2D: {fileID: 8300000, guid: 3bbcc0fa183204644bebe2ed357ef7cd, type: 3}
+  backgroundMusicVolume: 0.65
+  tilePrefab: {fileID: 6444961136359163803, guid: cc8849cd0a9b5e5409c21b03c0fa6d99, type: 3}
+  collectibleMoonPrefab: {fileID: 108532115625683861, guid: 5ead577b1153f634c82fdbde47365477, type: 3}
+  roseProjectilePrefab: {fileID: 1761246414295145499, guid: b1cff3acb7d0a3c46a50054bdaf0faa3, type: 3}
+  hazmatAcidProjectilePrefab: {fileID: 8063097226524469159, guid: 44641587f96cae54a8589926976c8493, type: 3}
+  plantDefinitions:
+  - {fileID: 11400000, guid: 21b2dc04fe0daaa4b89a3534a3eec775, type: 2}
+  - {fileID: 11400000, guid: ecacff108eb43cc4c98fac0ed933e395, type: 2}
+  - {fileID: 11400000, guid: 0759139272ace49458dc928ba05756bf, type: 2}
+  zombieDefinitions:
+  - {fileID: 11400000, guid: 4a9eb5e0ad17a744abbbdde072ad28e4, type: 2}
+  - {fileID: 11400000, guid: 6534a03c7043747459e8d426016eb0f9, type: 2}
+  - {fileID: 11400000, guid: 01a62dbc68dbee84eae88fe7ad4e8fe5, type: 2}
+  - {fileID: 11400000, guid: 245e0eed3d8a37f46adce36e4f174749, type: 2}

@@ -106,7 +106,7 @@ namespace Stellar.Combat
                 gridManager = GetComponent<GridManager>();
                 if (gridManager == null)
                 {
-                    gridManager = FindFirstObjectByType<GridManager>();
+                    gridManager = FindAnyObjectByType<GridManager>();
                 }
             }
             EnsureParticleSystems();
@@ -119,7 +119,7 @@ namespace Stellar.Combat
                 gridManager = GetComponent<GridManager>();
                 if (gridManager == null)
                 {
-                    gridManager = FindFirstObjectByType<GridManager>();
+                    gridManager = FindAnyObjectByType<GridManager>();
                 }
             }
 

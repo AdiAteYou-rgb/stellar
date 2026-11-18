@@ -239,7 +239,7 @@ public class PlayerController : MonoBehaviour
         // Only process 3D player movement when in the 3D 1v1 Arena (or if no GridManager is active)
         if (cachedGridManager == null)
         {
-            cachedGridManager = FindFirstObjectByType<GridManager>();
+            cachedGridManager = FindAnyObjectByType<GridManager>();
         }
         if (cachedGridManager != null && !isFirstPersonArenaActive)
         {

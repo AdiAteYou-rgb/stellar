@@ -1,0 +1,60 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2a1457b7992d3874682cd63982e94671, type: 3}
+  m_Name: DurianData
+  m_EditorClassIdentifier: Assembly-CSharp::PlantDefinitionSO
+  displayName: 'Durian [3]'
+  cost: 50
+  cooldown: 20
+  buttonReadyTint: {r: 0.9, g: 0.78, b: 0.3, a: 1}
+  maxHealth2D: 400
+  maxArenaHP: 400
+  arenaSpeedMultiplier: 0.92
+  unitSprite: {fileID: 21300000, guid: 76d595079ee3ae943818eb6dc657f6a3, type: 3}
+  prefab2D: {fileID: 988649228883846465, guid: 8d6a04359753d6f49a7ae9aff618a8f9, type: 3}
+  arenaVisualPrefab3D: {fileID: 8144590633275321760, guid: 06833bb240a630c48a43fb3c562514d0, type: 3}
+  primaryAbilityTitle: 'Spike Bash [LMB]
+
+    28 DMG'
+  primaryAbilityDamage: 28
+  primaryAbilityCooldown: 1
+  secondaryAbilityTitle: 'Durian Roll [RMB/E]
+
+    50 DMG + Stun'
+  secondaryAbilityDamage: 50
+  secondaryAbilityCooldown: 6
+  arenaAbilityHint: "[L-Click] Spike Bash (28 DMG)  \u2022  [R-Click / E] Durian Roll (50 DMG + 2.0s Stun)"
+  plantType: 2
+  actionInterval2D: 15
+  moonProduceAmount: 50
+  chargeDuration: 0.25
+  burstRadius: 4.6
+  rollDuration: 2.6
+  stunDuration: 2
+  primaryHitscanConfig:
+    abilityName: Ray Attack
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []
+  secondaryHitscanConfig:
+    abilityName: Ray Attack
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []

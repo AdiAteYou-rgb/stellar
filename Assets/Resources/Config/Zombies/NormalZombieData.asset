@@ -1,0 +1,63 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3470a6fbc84cdf045b5cea42e07d593a, type: 3}
+  m_Name: NormalZombieData
+  m_EditorClassIdentifier: Assembly-CSharp::ZombieDefinitionSO
+  displayName: 'Zombie [4]'
+  cost: 50
+  cooldown: 5
+  buttonReadyTint: {r: 0.68, g: 0.42, b: 0.88, a: 1}
+  maxHealth2D: 100
+  maxArenaHP: 150
+  arenaSpeedMultiplier: 1.15
+  unitSprite: {fileID: 21300000, guid: 95d14af5e50be3d49bd1bdce39fc71de, type: 3}
+  prefab2D: {fileID: 8571853965431340222, guid: 8bad7c87194b4444bae7a6547928b82a, type: 3}
+  arenaVisualPrefab3D: {fileID: 6320782986122427440, guid: 7242a45c2eae08a42996b210e19b8f69, type: 3}
+  primaryAbilityTitle: 'Claw Slash [LMB/E]
+
+    25 DMG'
+  primaryAbilityDamage: 25
+  primaryAbilityCooldown: 0.85
+  secondaryAbilityTitle: 'Feral Lunge [RMB/Q]
+
+    38 DMG'
+  secondaryAbilityDamage: 38
+  secondaryAbilityCooldown: 3.5
+  arenaAbilityHint: "[L-Click / E] Claw Slash  \u2022  [R-Click / Q] Feral Dive Lunge (Fast Pounce)"
+  zombieType: 0
+  moveSpeed2D: 0.58
+  bobFrequency2D: 5.2
+  bobAmplitude2D: 0.08
+  spitInterval2D: 2.2
+  spitRange2D: 7
+  spitAcidDamage2D: 30
+  arenaFovBonus: 9
+  activeAbilityDuration: 0.65
+  secondaryEffectDuration: 0
+  primaryHitscanConfig:
+    abilityName: Ray Attack
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []
+  secondaryHitscanConfig:
+    abilityName: Ray Attack
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []

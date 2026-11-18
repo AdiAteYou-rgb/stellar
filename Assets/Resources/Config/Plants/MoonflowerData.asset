@@ -1,0 +1,58 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2a1457b7992d3874682cd63982e94671, type: 3}
+  m_Name: MoonflowerData
+  m_EditorClassIdentifier: Assembly-CSharp::PlantDefinitionSO
+  displayName: 'Moonflower [1]'
+  cost: 50
+  cooldown: 5
+  buttonReadyTint: {r: 0.4, g: 0.85, b: 1, a: 1}
+  maxHealth2D: 100
+  maxArenaHP: 125
+  arenaSpeedMultiplier: 1
+  unitSprite: {fileID: 21300000, guid: cece70e520c99e7499bddc186d06c306, type: 3}
+  prefab2D: {fileID: 5251559460320536689, guid: 86917c95cdf36664e9835a6904810937, type: 3}
+  arenaVisualPrefab3D: {fileID: 6714351125247820030, guid: a39cad875d30b0e45940dde16ca41547, type: 3}
+  primaryAbilityTitle: 'Solar Bolt [LMB]
+
+    18 DMG'
+  primaryAbilityDamage: 18
+  primaryAbilityCooldown: 0.8
+  secondaryAbilityTitle: "Lunar Outburst [RMB/E]\n20 DMG \u2022 Knockback"
+  secondaryAbilityDamage: 20
+  secondaryAbilityCooldown: 10
+  arenaAbilityHint: "[L-Click] Solar Bolt (18 DMG)  \u2022  [R-Click / E] Lunar Outburst (20 DMG Blast + Self/Zombie Knockback)"
+  plantType: 0
+  actionInterval2D: 15
+  moonProduceAmount: 50
+  chargeDuration: 0.25
+  burstRadius: 4.6
+  rollDuration: 2.6
+  stunDuration: 2
+  primaryHitscanConfig:
+    abilityName: Solar Bolt
+    hasMaxRange: 1
+    maxRange: 60
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []
+  secondaryHitscanConfig:
+    abilityName: Ray Attack
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []

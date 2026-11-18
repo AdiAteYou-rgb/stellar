@@ -1,0 +1,61 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3470a6fbc84cdf045b5cea42e07d593a, type: 3}
+  m_Name: BucketheadZombieData
+  m_EditorClassIdentifier: Assembly-CSharp::ZombieDefinitionSO
+  displayName: 'Buckethead [5]'
+  cost: 100
+  cooldown: 12
+  buttonReadyTint: {r: 0.62, g: 0.72, b: 0.84, a: 1}
+  maxHealth2D: 500
+  maxArenaHP: 400
+  arenaSpeedMultiplier: 0.86
+  unitSprite: {fileID: 21300000, guid: e7f7f4bd809fb3744803f92cbf9c72b8, type: 3}
+  prefab2D: {fileID: 4032909842313716619, guid: ba621f077e5ef804f8828c848af693d2, type: 3}
+  arenaVisualPrefab3D: {fileID: 7798187730341833991, guid: dee266456fe0f464091132d91474fa79, type: 3}
+  primaryAbilityTitle: 'Heavy Slash [LMB]
+
+    30 DMG'
+  primaryAbilityDamage: 30
+  primaryAbilityCooldown: 1
+  secondaryAbilityTitle: 'Bucket Parry [RMB/E]'
+  secondaryAbilityDamage: 0
+  secondaryAbilityCooldown: 5
+  arenaAbilityHint: "[L-Click] Heavy Slash  \u2022  [R-Click / E / Q] Iron Bucket Parry (1s Block -> 3s Speed Boost, 5s CD)"
+  zombieType: 1
+  moveSpeed2D: 0.46
+  bobFrequency2D: 4.2
+  bobAmplitude2D: 0.08
+  spitInterval2D: 2.2
+  spitRange2D: 7
+  spitAcidDamage2D: 30
+  arenaFovBonus: 4
+  activeAbilityDuration: 1
+  secondaryEffectDuration: 3
+  primaryHitscanConfig:
+    abilityName: Ray Attack
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []
+  secondaryHitscanConfig:
+    abilityName: Ray Attack
+    hasMaxRange: 1
+    maxRange: 65
+    visualEffectPrefab: {fileID: 0}
+    visualEffectLifetime: 1.5
+    onHitscanFired:
+      m_PersistentCalls:
+        m_Calls: []
