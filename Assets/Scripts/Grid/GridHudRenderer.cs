@@ -20,6 +20,8 @@ public class GridHudRenderer : MonoBehaviour
     private static GUIStyle s_ClashStyle;
     private static GUIStyle s_TimerStyle;
     private static GUIStyle s_BankStyle;
+    private static GUIStyle s_BankLabelStyle;
+    private static GUIStyle s_BankValueStyle;
     private static GUIStyle s_PlantBtnStyle;
     private static GUIStyle s_ZombieBtnStyle;
     private static GUIStyle s_GameOverTitleStyle;
@@ -148,9 +150,7 @@ public class GridHudRenderer : MonoBehaviour
 
         if (grid.canPlacePlants)
         {
-            s_BankStyle.normal.textColor = new Color(1.0f, 0.95f, 0.4f);
-            GUI.backgroundColor = new Color(0.12f, 0.18f, 0.32f, 0.95f);
-            GUI.Box(MoonBankRect, $"MOONS\n{grid.currentMoons}", s_BankStyle);
+            DrawMoonBank();
 
             DrawPlantSeedButton(0, PlantType.Moonflower, "Moonflower [1]", grid.moonflowerCost, new Color(0.4f, 0.85f, 1.0f));
             DrawPlantSeedButton(1, PlantType.Rose, "Rose [2]", grid.roseCost, new Color(1.0f, 0.4f, 0.5f));
@@ -172,6 +172,73 @@ public class GridHudRenderer : MonoBehaviour
         }
 
         GUI.backgroundColor = prevBg;
+    }
+
+    private void DrawMoonBank()
+    {
+        Color prevBg = GUI.backgroundColor;
+        Color prevColor = GUI.color;
+
+        GUI.backgroundColor = new Color(0.12f, 0.18f, 0.32f, 0.95f);
+        GUI.Box(MoonBankRect, GUIContent.none);
+
+        Sprite moonCounterSprite = GetMoonCounterSprite();
+        if (moonCounterSprite != null && moonCounterSprite.texture != null)
+        {
+            Texture2D tex = moonCounterSprite.texture;
+            Rect tr = moonCounterSprite.textureRect;
+            Rect texCoords = new Rect(
+                tr.x / tex.width,
+                tr.y / tex.height,
+                tr.width / tex.width,
+                tr.height / tex.height);
+
+            Rect slot = new Rect(MoonBankRect.x + 2f, MoonBankRect.y + 6f, 52f, 54f);
+            float aspect = tr.width / Mathf.Max(1f, tr.height);
+            float drawW = slot.width;
+            float drawH = drawW / Mathf.Max(0.01f, aspect);
+            if (drawH > slot.height)
+            {
+                drawH = slot.height;
+                drawW = drawH * aspect;
+            }
+            Rect iconRect = new Rect(
+                slot.x + (slot.width - drawW) * 0.5f,
+                slot.y + (slot.height - drawH) * 0.5f,
+                drawW,
+                drawH);
+
+            GUI.color = Color.white;
+            GUI.DrawTextureWithTexCoords(iconRect, tex, texCoords, true);
+
+            Rect textCol = new Rect(MoonBankRect.x + 48f, MoonBankRect.y + 8f, MoonBankRect.width - 52f, MoonBankRect.height - 16f);
+            GUI.Label(new Rect(textCol.x, textCol.y, textCol.width, 18f), "MOONS", s_BankLabelStyle);
+            GUI.Label(new Rect(textCol.x, textCol.y + 18f, textCol.width, 30f), grid.currentMoons.ToString(), s_BankValueStyle);
+        }
+        else
+        {
+            s_BankStyle.normal.textColor = new Color(1.0f, 0.95f, 0.4f);
+            GUI.Label(MoonBankRect, $"MOONS\n{grid.currentMoons}", s_BankStyle);
+        }
+
+        GUI.color = prevColor;
+        GUI.backgroundColor = prevBg;
+    }
+
+    private Sprite GetMoonCounterSprite()
+    {
+        Sprite diskSprite = GameVisuals.GetPlantSprite(PlantType.Moonflower);
+        if (diskSprite != null) return diskSprite;
+
+        if (grid != null && grid.gameConfig != null)
+        {
+            PlantDefinitionSO def = grid.gameConfig.GetPlantDefinition(PlantType.Moonflower);
+            if (def != null && def.unitSprite != null)
+            {
+                return def.unitSprite;
+            }
+        }
+        return null;
     }
 
     private void DrawPlantSeedButton(int index, PlantType type, string title, int cost, Color readyTint)
@@ -306,6 +373,10 @@ public class GridHudRenderer : MonoBehaviour
 
         s_TimerStyle = new GUIStyle(GUI.skin.box) { fontSize = 15, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
         s_BankStyle = new GUIStyle(GUI.skin.box) { fontSize = 17, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
+        s_BankLabelStyle = new GUIStyle(GUI.skin.label) { fontSize = 11, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
+        s_BankLabelStyle.normal.textColor = new Color(0.82f, 0.92f, 1.0f);
+        s_BankValueStyle = new GUIStyle(GUI.skin.label) { fontSize = 19, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
+        s_BankValueStyle.normal.textColor = new Color(1.0f, 0.95f, 0.4f);
         s_PlantBtnStyle = new GUIStyle(GUI.skin.button) { fontSize = 12, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
         s_ZombieBtnStyle = new GUIStyle(GUI.skin.button) { fontSize = 12, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
         s_GameOverTitleStyle = new GUIStyle(GUI.skin.label) { fontSize = 30, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
