@@ -20,11 +20,6 @@ public class WallZombie : GridUnitBase
     public ZombieType zombieType = ZombieType.Normal;
     public float moveSpeed = 0.58f;
 
-    [Header("Hazmat Ranged Settings")]
-    public float hazmatSpitInterval = 2.2f;
-    public float hazmatSpitRange = 7.0f;
-    public int hazmatAcidDamage = 30;
-
     protected float bobTimer = 0f;
     protected float bobFreq = 5.2f;
     protected float bobAmp = 0.08f;
@@ -89,9 +84,6 @@ public class WallZombie : GridUnitBase
         moveSpeed = def.moveSpeed2D;
         bobFreq = def.bobFrequency2D;
         bobAmp = def.bobAmplitude2D;
-        hazmatSpitInterval = def.spitInterval2D;
-        hazmatSpitRange = def.spitRange2D;
-        hazmatAcidDamage = def.spitAcidDamage2D;
     }
 
     public void MarkClashResolved()

@@ -111,6 +111,3 @@ MonoBehaviour:
   currentHealth: 100
   zombieType: 0
   moveSpeed: 0.58
-  hazmatSpitInterval: 2.2
-  hazmatSpitRange: 7
-  hazmatAcidDamage: 30

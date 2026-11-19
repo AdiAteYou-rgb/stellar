@@ -6,6 +6,11 @@ using UnityEngine;
 /// </summary>
 public class HazmatZombie : WallZombie
 {
+    [Header("Hazmat Ranged Settings")]
+    public float hazmatSpitInterval = 2.2f;
+    public float hazmatSpitRange = 7.0f;
+    public int hazmatAcidDamage = 30;
+
     private float hazmatSpitTimer = 0f;
     private float hazmatSpitAnimTimer = 0f;
 
@@ -19,6 +24,15 @@ public class HazmatZombie : WallZombie
         hazmatSpitTimer = 1.2f; // Ready to spit shortly after spawning
         hazmatSpitAnimTimer = 0f;
         base.Initialize(manager, laneRow, startPos, ZombieType.Hazmat);
+    }
+
+    protected override void OnApplyDefinition(ZombieDefinitionSO def)
+    {
+        base.OnApplyDefinition(def);
+        if (def == null) return;
+        hazmatSpitInterval = def.spitInterval2D;
+        hazmatSpitRange = def.spitRange2D;
+        hazmatAcidDamage = def.spitAcidDamage2D;
     }
 
     protected override void CacheLimbs()
