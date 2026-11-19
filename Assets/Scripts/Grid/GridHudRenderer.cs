@@ -193,7 +193,7 @@ public class GridHudRenderer : MonoBehaviour
                 tr.width / tex.width,
                 tr.height / tex.height);
 
-            Rect slot = new Rect(MoonBankRect.x + 2f, MoonBankRect.y + 6f, 52f, 54f);
+            Rect slot = new Rect(MoonBankRect.x + 5f, MoonBankRect.y + 11f, 42f, 44f);
             float aspect = tr.width / Mathf.Max(1f, tr.height);
             float drawW = slot.width;
             float drawH = drawW / Mathf.Max(0.01f, aspect);
@@ -211,7 +211,7 @@ public class GridHudRenderer : MonoBehaviour
             GUI.color = Color.white;
             GUI.DrawTextureWithTexCoords(iconRect, tex, texCoords, true);
 
-            Rect textCol = new Rect(MoonBankRect.x + 48f, MoonBankRect.y + 8f, MoonBankRect.width - 52f, MoonBankRect.height - 16f);
+            Rect textCol = new Rect(MoonBankRect.x + 50f, MoonBankRect.y + 8f, MoonBankRect.width - 54f, MoonBankRect.height - 16f);
             GUI.Label(new Rect(textCol.x, textCol.y, textCol.width, 18f), "MOONS", s_BankLabelStyle);
             GUI.Label(new Rect(textCol.x, textCol.y + 18f, textCol.width, 30f), grid.currentMoons.ToString(), s_BankValueStyle);
         }
@@ -227,15 +227,15 @@ public class GridHudRenderer : MonoBehaviour
 
     private Sprite GetMoonCounterSprite()
     {
-        Sprite diskSprite = GameVisuals.GetPlantSprite(PlantType.Moonflower);
+        Sprite diskSprite = GameVisuals.GetMoonSprite();
         if (diskSprite != null) return diskSprite;
 
-        if (grid != null && grid.gameConfig != null)
+        if (grid != null && grid.gameConfig != null && grid.gameConfig.collectibleMoonPrefab != null)
         {
-            PlantDefinitionSO def = grid.gameConfig.GetPlantDefinition(PlantType.Moonflower);
-            if (def != null && def.unitSprite != null)
+            SpriteRenderer sr = grid.gameConfig.collectibleMoonPrefab.GetComponent<SpriteRenderer>();
+            if (sr != null && sr.sprite != null)
             {
-                return def.unitSprite;
+                return sr.sprite;
             }
         }
         return null;
