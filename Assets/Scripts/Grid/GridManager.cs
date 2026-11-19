@@ -174,6 +174,8 @@ public class GridManager : MonoBehaviour
     private void Awake()
     {
         Application.runInBackground = true;
+        QualitySettings.vSyncCount = 0;
+        Application.targetFrameRate = -1;
         SyncWallScale();
 
         if (Application.isPlaying)
