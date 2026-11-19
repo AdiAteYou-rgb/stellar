@@ -110,8 +110,6 @@ public class MultiplayerMenuManager : MonoBehaviour
         SyncMenuWallScale();
         EnsureMenuBackdrop();
         Application.runInBackground = true;
-        Application.targetFrameRate = 60;
-        QualitySettings.vSyncCount = 1;
 
         if (Application.isPlaying)
         {
